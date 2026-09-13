@@ -105,11 +105,11 @@ public class BattleService {
         User p1 = battle.getPlayerOne();
         User p2 = battle.getPlayerTwo();
 
-        // Simple fixed-K rating adjustment — swap for real Elo/Glicko later
+        // Simple fixed-K rating adjustment swap for real Elo/Glicko later
         final int K = 20;
 
         if (winner == null) {
-            // draw — no rating change
+            // draw no rating change
             return;
         }
 

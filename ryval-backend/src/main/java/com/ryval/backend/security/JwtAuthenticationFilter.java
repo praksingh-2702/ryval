@@ -53,7 +53,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 }
             }
         } catch (Exception ex) {
-            // Malformed, expired, or otherwise invalid token — don't crash the filter chain.
+            // Malformed, expired, or otherwise invalid token don't crash the filter chain.
             // Leave the SecurityContext unauthenticated; downstream authorization rules
             // (permitAll routes still work, protected routes correctly return 401/403) handle the rest.
             logger.debug("Invalid JWT on request: " + ex.getMessage());

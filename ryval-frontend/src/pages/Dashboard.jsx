@@ -74,7 +74,10 @@ export default function Dashboard() {
           />
         </div>
 
-        <button className="w-full flex items-center justify-center gap-2 bg-violet hover:bg-violet-dim transition-colors text-white font-semibold py-4 rounded-xl mb-12 text-base">
+        <button
+          onClick={() => navigate("/queue")}
+          className="w-full flex items-center justify-center gap-2 bg-violet hover:bg-violet-dim transition-colors text-white font-semibold py-4 rounded-xl mb-12 text-base"
+        >
           <Swords size={18} />
           Find a battle
         </button>

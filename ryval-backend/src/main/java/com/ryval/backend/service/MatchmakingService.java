@@ -7,7 +7,9 @@ import com.ryval.backend.repository.BattleRepository;
 import com.ryval.backend.repository.MatchmakingQueueRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -24,6 +26,7 @@ public class MatchmakingService {
      * Adds a user to the queue, and immediately tries to find an opponent.
      * Returns the created Battle if a match was found, otherwise empty (still queued).
      */
+    @Transactional
     public Optional<Battle> joinQueue(User user) {
         matchmakingQueueRepository.findByUser(user).ifPresent(matchmakingQueueRepository::delete);
 
@@ -43,11 +46,10 @@ public class MatchmakingService {
             return Optional.of(battleRepository.save(battle));
         }
 
-        MatchmakingQueue entry = MatchmakingQueue.builder()
-                .user(user)
-                .ratingAtQueueTime(user.getRating())
-                .build();
-        matchmakingQueueRepository.save(entry);
+        // Uses INSERT ... ON CONFLICT DO NOTHING so a near-simultaneous duplicate
+        // request from the same user is silently skipped rather than throwing a
+        // constraint-violation exception (which would poison this transaction).
+        matchmakingQueueRepository.upsertQueueEntry(user.getId(), user.getRating(), Instant.now());
 
         return Optional.empty();
     }

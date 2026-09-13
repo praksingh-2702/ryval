@@ -3,6 +3,8 @@ import Landing from "./pages/Landing";
 import Register from "./pages/Register";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
+import Queue from "./pages/Queue";
+import Battle from "./pages/Battle";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 export default function App() {
@@ -17,6 +19,22 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Dashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/queue"
+          element={
+            <ProtectedRoute>
+              <Queue />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/battle/:battleId"
+          element={
+            <ProtectedRoute>
+              <Battle />
             </ProtectedRoute>
           }
         />

@@ -17,7 +17,7 @@ import java.util.function.Function;
 @Service
 public class JwtService {
 
-    // In application.yml add: jwt.secret and jwt.expiration-ms — this is a placeholder default.
+    // In application.yml add: jwt.secret and jwt.expiration-ms this is a placeholder default.
     @Value("${jwt.secret:ryval-dev-secret-key-change-this-before-production-0123456789}")
     private String secretKey;
 
