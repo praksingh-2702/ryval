@@ -1,0 +1,5 @@
+ryval-backend/target/
+ryval-backend/.idea/
+ryval-frontend/node_modules/ 
+ryval-frontend/dist/
+.vscode/ 

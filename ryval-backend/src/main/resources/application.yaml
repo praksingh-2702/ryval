@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: ryval-backend
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/ryval}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    open-in-view: true       # explicit (silences the warning); kept true because BattleController serializes lazy associations directly
+    hibernate:
+      ddl-auto: update        # auto-creates/updates tables from your @Entity classes. Switch to 'validate' once schema stabilizes.
+    show-sql: true             # logs generated SQL to console — helpful while developing
+    properties:
+      hibernate:
+        format_sql: true
+
+  jackson:
+    default-property-inclusion: non_null
+
+server:
+  port: 8080
+
+logging:
+  level:
+    com.ryval.backend: DEBUG
+    org.springframework.security.config.annotation.authentication.configuration.InitializeUserDetailsBeanManagerConfigurer: ERROR
+    # ^ harmless warning: it fires because we intentionally use a manual AuthenticationProvider bean instead of
+    # relying on Spring's auto-wired UserDetailsService login setup. Suppressed since this is expected.
