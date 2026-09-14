@@ -22,12 +22,15 @@ public class MatchmakingService {
     private final MatchmakingQueueRepository matchmakingQueueRepository;
     private final BattleRepository battleRepository;
 
-    /**
-     * Adds a user to the queue, and immediately tries to find an opponent.
-     * Returns the created Battle if a match was found, otherwise empty (still queued).
-     */
     @Transactional
     public Optional<Battle> joinQueue(User user) {
+        // If this user was already matched by the OTHER player's poll request,
+        // pick that battle up here instead of getting silently re-queued.
+        Optional<Battle> existing = battleRepository.findActiveBattleForUser(user);
+        if (existing.isPresent()) {
+            return existing;
+        }
+
         matchmakingQueueRepository.findByUser(user).ifPresent(matchmakingQueueRepository::delete);
 
         List<MatchmakingQueue> candidates = matchmakingQueueRepository.findCandidates(
@@ -54,11 +57,10 @@ public class MatchmakingService {
         try {
             matchmakingQueueRepository.save(entry);
         } catch (DataIntegrityViolationException ex) {
-            // Two near-simultaneous join requests from the same user (e.g. frontend
-            // polling/retry, or a double-fired effect) can both pass the "delete existing
-            // entry" check before either insert commits, tripping the unique constraint
-            // on user_id. This isn't a real error — the user is already queued as a
-            // result of the other request, so just treat this call as "still queued".
+            // Two near-simultaneous join requests from the same user can both pass
+            // the "delete existing entry" check before either insert commits,
+            // tripping the unique constraint on user_id. Not a real error — treat
+            // as "already queued".
         }
 
         return Optional.empty();
