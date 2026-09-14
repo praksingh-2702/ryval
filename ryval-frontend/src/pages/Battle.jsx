@@ -11,11 +11,12 @@ export default function Battle() {
 
   const [battle] = useState(location.state?.battle || null);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [selectedOption, setSelectedOption] = useState(null); // "A" | "B" | "C" | "D" | null
+  const [selectedOption, setSelectedOption] = useState(null);
   const [submitting, setSubmitting] = useState(false);
-  const [lastResult, setLastResult] = useState(null); // { isCorrect } or null
+  const [lastResult, setLastResult] = useState(null);
   const [startedAt, setStartedAt] = useState(Date.now());
-  const [result, setResult] = useState(null); // final BattleResponse after /end
+  const [result, setResult] = useState(null);
+  const [waitingForOpponent, setWaitingForOpponent] = useState(false);
 
   useEffect(() => {
     if (!battle) {
@@ -23,9 +24,33 @@ export default function Battle() {
     }
   }, [battle, navigate]);
 
+  // Once this player has finished all questions, poll /end until the backend
+  // reports COMPLETED — which only happens after the opponent finishes too.
+  useEffect(() => {
+    if (!waitingForOpponent || result) return;
+
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      try {
+        const { data } = await api.post(`/battles/${battle.id}/end`);
+        if (!cancelled && data.status === "COMPLETED") {
+          setResult(data);
+          setWaitingForOpponent(false);
+        }
+      } catch {
+        // transient failure — keep polling
+      }
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [waitingForOpponent, result, battle]);
+
   if (!battle) return null;
 
-  const questions = battle.questions; // [{battleQuestionId, questionId, prompt, optionA..D, sequenceOrder}]
+  const questions = battle.questions;
   const currentQuestion = questions[currentIndex];
   const isLastQuestion = currentIndex === questions.length - 1;
 
@@ -35,10 +60,10 @@ export default function Battle() {
       : battle.playerOneUsername;
 
   const options = [
-    { key: "A", text: currentQuestion.optionA },
-    { key: "B", text: currentQuestion.optionB },
-    { key: "C", text: currentQuestion.optionC },
-    { key: "D", text: currentQuestion.optionD },
+    { key: "A", text: currentQuestion?.optionA },
+    { key: "B", text: currentQuestion?.optionB },
+    { key: "C", text: currentQuestion?.optionC },
+    { key: "D", text: currentQuestion?.optionD },
   ];
 
   async function handleSelect(optionKey) {
@@ -71,7 +96,11 @@ export default function Battle() {
     setSubmitting(true);
     try {
       const { data } = await api.post(`/battles/${battle.id}/end`);
-      setResult(data);
+      if (data.status === "COMPLETED") {
+        setResult(data);
+      } else {
+        setWaitingForOpponent(true);
+      }
     } catch {
       navigate("/dashboard");
     } finally {
@@ -100,6 +129,22 @@ export default function Battle() {
           >
             Back to dashboard
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (waitingForOpponent) {
+    return (
+      <div className="min-h-screen bg-ink text-paper flex items-center justify-center px-6">
+        <div className="text-center max-w-sm">
+          <p className="font-display text-2xl font-semibold mb-2">
+            Waiting for {opponentUsername}…
+          </p>
+          <p className="text-sm text-muted">
+            You've finished all your questions. Results appear once your opponent
+            is done.
+          </p>
         </div>
       </div>
     );
