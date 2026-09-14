@@ -27,14 +27,8 @@ public class BattleService {
     public BattleResponse startBattle(Long battleId) {
         Battle battle = getBattle(battleId);
 
-        // Idempotency guard: matchmaking now returns the SAME battle to both
-        // players (whoever polls second picks up the battle the first poll
-        // already created), so BattleController.joinQueue() calls startBattle()
-        // twice for the same battle — once per player. Without this check,
-        // that would insert two separate shuffled sets of battle_questions for
-        // one battle, giving each player a different question set. Only build
-        // the question set once, on the first (PENDING) call; the second call
-        // just returns the already-built battle as-is.
+        // Idempotency guard: both players' polls resolve to the same battle, so
+        // this runs twice. Only build the question set on the first (PENDING) call.
         if (battle.getStatus() != Battle.Status.PENDING) {
             return toResponse(battle);
         }
@@ -66,8 +60,6 @@ public class BattleService {
         BattleQuestion battleQuestion = battleQuestionRepository.findById(request.getBattleQuestionId())
                 .orElseThrow(() -> new RuntimeException("Battle question not found"));
 
-        // correctAnswer is now a single letter ("A"/"B"/"C"/"D"), and the
-        // frontend sends the letter the user clicked as `answer`.
         boolean isCorrect = battleQuestion.getQuestion().getCorrectAnswer()
                 .trim().equalsIgnoreCase(request.getAnswer().trim());
 
@@ -86,7 +78,26 @@ public class BattleService {
     public BattleResponse endBattle(Long battleId) {
         Battle battle = getBattle(battleId);
 
+        // Idempotency guard: both players call /end when they finish. Without
+        // this, the second call re-runs updateRatingsAndRecord() and applies a
+        // SECOND ±20 rating change plus an extra win/loss to each player's
+        // record for the same single battle.
+        if (battle.getStatus() == Battle.Status.COMPLETED) {
+            return toResponse(battle);
+        }
+
         List<BattleQuestion> battleQuestions = battleQuestionRepository.findByBattleOrderBySequenceOrderAsc(battle);
+
+        long p1Answered = countAnswered(battleQuestions, battle.getPlayerOne());
+        long p2Answered = countAnswered(battleQuestions, battle.getPlayerTwo());
+
+        // Don't settle the battle until BOTH players have answered every
+        // question. Whoever finishes first would otherwise decide the winner
+        // against the opponent's partial (artificially low) score. Return the
+        // battle still IN_PROGRESS so the frontend can show a waiting state.
+        if (p1Answered < battleQuestions.size() || p2Answered < battleQuestions.size()) {
+            return toResponse(battle);
+        }
 
         long p1Correct = countCorrect(battleQuestions, battle.getPlayerOne());
         long p2Correct = countCorrect(battleQuestions, battle.getPlayerTwo());
@@ -106,6 +117,13 @@ public class BattleService {
         updateRatingsAndRecord(battle, winner);
 
         return toResponse(battle);
+    }
+
+    private long countAnswered(List<BattleQuestion> battleQuestions, User user) {
+        return battleQuestions.stream()
+                .flatMap(bq -> battleAnswerRepository.findByBattleQuestion(bq).stream())
+                .filter(a -> a.getUser().getId().equals(user.getId()))
+                .count();
     }
 
     private long countCorrect(List<BattleQuestion> battleQuestions, User user) {
