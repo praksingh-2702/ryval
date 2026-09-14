@@ -25,8 +25,6 @@ public class MatchmakingService {
 
     @Transactional
     public Optional<Battle> joinQueue(User user) {
-        // If this user was already matched by the OTHER player's poll request,
-        // pick that battle up here instead of getting silently re-queued.
         Optional<Battle> existing = battleRepository.findActiveBattleForUser(user);
         if (existing.isPresent()) {
             return existing;
@@ -34,8 +32,6 @@ public class MatchmakingService {
 
         matchmakingQueueRepository.findByUser(user).ifPresent(matchmakingQueueRepository::delete);
 
-        // Locks the single best candidate row (FOR UPDATE) so a concurrent poll
-        // from another user can't grab the same opponent at the same time.
         List<MatchmakingQueue> candidates = matchmakingQueueRepository.findCandidatesForUpdate(
                 user, user.getRating(), INITIAL_RATING_RANGE, PageRequest.of(0, 1));
 
@@ -60,10 +56,7 @@ public class MatchmakingService {
         try {
             matchmakingQueueRepository.save(entry);
         } catch (DataIntegrityViolationException ex) {
-            // Two near-simultaneous join requests from the same user can both pass
-            // the "delete existing entry" check before either insert commits,
-            // tripping the unique constraint on user_id. Not a real error — treat
-            // as "already queued".
+            // ignore — already queued via concurrent request
         }
 
         return Optional.empty();
