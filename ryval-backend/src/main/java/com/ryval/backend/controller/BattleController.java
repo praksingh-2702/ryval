@@ -53,8 +53,11 @@ public class BattleController {
     }
 
     @PostMapping("/{battleId}/end")
-    public ResponseEntity<BattleResponse> endBattle(@PathVariable Long battleId) {
-        return ResponseEntity.ok(battleService.endBattle(battleId));
+    public ResponseEntity<BattleResponse> endBattle(
+            @PathVariable Long battleId,
+            Authentication authentication
+    ) {
+        return ResponseEntity.ok(battleService.endBattle(battleId, authentication.getName()));
     }
 
     @GetMapping("/me")

@@ -27,15 +27,15 @@ public class BattleService {
     public BattleResponse startBattle(Long battleId) {
         Battle battle = getBattle(battleId);
 
-        // Idempotency guard: both players' polls resolve to the same battle, so
-        // this runs twice. Only build the question set on the first (PENDING) call.
         if (battle.getStatus() != Battle.Status.PENDING) {
             return toResponse(battle);
         }
 
         List<Question> questions = questionRepository.findAll();
         java.util.Collections.shuffle(questions);
-        List<Question> selected = questions.stream().limit(QUESTIONS_PER_BATTLE).collect(Collectors.toList());
+        List<Question> selected = questions.stream()
+                .limit(QUESTIONS_PER_BATTLE)
+                .collect(Collectors.toList());
 
         for (int i = 0; i < selected.size(); i++) {
             BattleQuestion bq = BattleQuestion.builder()
@@ -75,29 +75,28 @@ public class BattleService {
     }
 
     @Transactional
-    public BattleResponse endBattle(Long battleId) {
-        Battle battle = getBattle(battleId);
+    public BattleResponse endBattle(Long battleId, String username) {
+        Battle battle = battleRepository.findByIdWithLock(battleId)
+                .orElseThrow(() -> new RuntimeException("Battle not found: " + battleId));
 
-        // Idempotency guard: both players call /end when they finish. Without
-        // this, the second call re-runs updateRatingsAndRecord() and applies a
-        // SECOND ±20 rating change plus an extra win/loss to each player's
-        // record for the same single battle.
         if (battle.getStatus() == Battle.Status.COMPLETED) {
             return toResponse(battle);
         }
 
-        List<BattleQuestion> battleQuestions = battleQuestionRepository.findByBattleOrderBySequenceOrderAsc(battle);
+        boolean isPlayerOne = battle.getPlayerOne().getUsername().equals(username);
+        if (isPlayerOne) {
+            battle.setPlayerOneFinished(true);
+        } else {
+            battle.setPlayerTwoFinished(true);
+        }
+        battleRepository.save(battle);
 
-        long p1Answered = countAnswered(battleQuestions, battle.getPlayerOne());
-        long p2Answered = countAnswered(battleQuestions, battle.getPlayerTwo());
-
-        // Don't settle the battle until BOTH players have answered every
-        // question. Whoever finishes first would otherwise decide the winner
-        // against the opponent's partial (artificially low) score. Return the
-        // battle still IN_PROGRESS so the frontend can show a waiting state.
-        if (p1Answered < battleQuestions.size() || p2Answered < battleQuestions.size()) {
+        if (!battle.isPlayerOneFinished() || !battle.isPlayerTwoFinished()) {
             return toResponse(battle);
         }
+
+        List<BattleQuestion> battleQuestions =
+                battleQuestionRepository.findByBattleOrderBySequenceOrderAsc(battle);
 
         long p1Correct = countCorrect(battleQuestions, battle.getPlayerOne());
         long p2Correct = countCorrect(battleQuestions, battle.getPlayerTwo());
@@ -119,13 +118,6 @@ public class BattleService {
         return toResponse(battle);
     }
 
-    private long countAnswered(List<BattleQuestion> battleQuestions, User user) {
-        return battleQuestions.stream()
-                .flatMap(bq -> battleAnswerRepository.findByBattleQuestion(bq).stream())
-                .filter(a -> a.getUser().getId().equals(user.getId()))
-                .count();
-    }
-
     private long countCorrect(List<BattleQuestion> battleQuestions, User user) {
         return battleQuestions.stream()
                 .flatMap(bq -> battleAnswerRepository.findByBattleQuestion(bq).stream())
@@ -134,14 +126,13 @@ public class BattleService {
     }
 
     private void updateRatingsAndRecord(Battle battle, User winner) {
-        User p1 = battle.getPlayerOne();
-        User p2 = battle.getPlayerTwo();
-
-        final int K = 20;
-
         if (winner == null) {
             return;
         }
+
+        User p1 = battle.getPlayerOne();
+        User p2 = battle.getPlayerTwo();
+        final int K = 20;
 
         User loser = winner.getId().equals(p1.getId()) ? p2 : p1;
 
@@ -165,7 +156,8 @@ public class BattleService {
     }
 
     private BattleResponse toResponse(Battle battle) {
-        List<BattleQuestion> battleQuestions = battleQuestionRepository.findByBattleOrderBySequenceOrderAsc(battle);
+        List<BattleQuestion> battleQuestions =
+                battleQuestionRepository.findByBattleOrderBySequenceOrderAsc(battle);
 
         List<BattleResponse.QuestionSummary> summaries = battleQuestions.stream()
                 .map(bq -> BattleResponse.QuestionSummary.builder()
