@@ -2,7 +2,9 @@ package com.ryval.backend.repository;
 
 import com.ryval.backend.model.Battle;
 import com.ryval.backend.model.User;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -16,10 +18,6 @@ public interface BattleRepository extends JpaRepository<Battle, Long> {
 
     List<Battle> findByStatus(Battle.Status status);
 
-    // Used by matchmaking polling: lets whichever player's request DIDN'T create
-    // the Battle row still discover it on their next poll, instead of being
-    // silently re-queued forever. ORDER BY + LIMIT 1 in case somehow more than
-    // one live battle exists for a user (shouldn't happen, but keeps this safe).
     @Query("SELECT b FROM Battle b WHERE (b.playerOne = :user OR b.playerTwo = :user) " +
            "AND b.status IN (com.ryval.backend.model.Battle.Status.PENDING, com.ryval.backend.model.Battle.Status.IN_PROGRESS) " +
            "ORDER BY b.createdAt DESC")
@@ -29,4 +27,10 @@ public interface BattleRepository extends JpaRepository<Battle, Long> {
         List<Battle> battles = findActiveBattlesForUser(user);
         return battles.isEmpty() ? Optional.empty() : Optional.of(battles.get(0));
     }
+
+    // Pessimistic write lock — used in endBattle to prevent two simultaneous
+    // /end calls from both passing the COMPLETED check and double-applying ratings.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM Battle b WHERE b.id = :id")
+    Optional<Battle> findByIdWithLock(@Param("id") Long id);
 }

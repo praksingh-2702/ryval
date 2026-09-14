@@ -16,6 +16,10 @@ import java.time.Instant;
 @AllArgsConstructor
 public class Battle {
 
+    public enum Status {
+        PENDING, IN_PROGRESS, COMPLETED
+    }
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -37,6 +41,14 @@ public class Battle {
     @Builder.Default
     private Status status = Status.PENDING;
 
+    @Column(nullable = false)
+    @Builder.Default
+    private boolean playerOneFinished = false;
+
+    @Column(nullable = false)
+    @Builder.Default
+    private boolean playerTwoFinished = false;
+
     @Column(updatable = false)
     private Instant createdAt;
 
@@ -45,9 +57,5 @@ public class Battle {
     @PrePersist
     protected void onCreate() {
         this.createdAt = Instant.now();
-    }
-
-    public enum Status {
-        PENDING, IN_PROGRESS, COMPLETED, ABANDONED
     }
 }
