@@ -27,6 +27,18 @@ public class BattleService {
     public BattleResponse startBattle(Long battleId) {
         Battle battle = getBattle(battleId);
 
+        // Idempotency guard: matchmaking now returns the SAME battle to both
+        // players (whoever polls second picks up the battle the first poll
+        // already created), so BattleController.joinQueue() calls startBattle()
+        // twice for the same battle — once per player. Without this check,
+        // that would insert two separate shuffled sets of battle_questions for
+        // one battle, giving each player a different question set. Only build
+        // the question set once, on the first (PENDING) call; the second call
+        // just returns the already-built battle as-is.
+        if (battle.getStatus() != Battle.Status.PENDING) {
+            return toResponse(battle);
+        }
+
         List<Question> questions = questionRepository.findAll();
         java.util.Collections.shuffle(questions);
         List<Question> selected = questions.stream().limit(QUESTIONS_PER_BATTLE).collect(Collectors.toList());
@@ -54,6 +66,8 @@ public class BattleService {
         BattleQuestion battleQuestion = battleQuestionRepository.findById(request.getBattleQuestionId())
                 .orElseThrow(() -> new RuntimeException("Battle question not found"));
 
+        // correctAnswer is now a single letter ("A"/"B"/"C"/"D"), and the
+        // frontend sends the letter the user clicked as `answer`.
         boolean isCorrect = battleQuestion.getQuestion().getCorrectAnswer()
                 .trim().equalsIgnoreCase(request.getAnswer().trim());
 
@@ -105,11 +119,9 @@ public class BattleService {
         User p1 = battle.getPlayerOne();
         User p2 = battle.getPlayerTwo();
 
-        // Simple fixed-K rating adjustment swap for real Elo/Glicko later
         final int K = 20;
 
         if (winner == null) {
-            // draw no rating change
             return;
         }
 
@@ -142,6 +154,10 @@ public class BattleService {
                         .battleQuestionId(bq.getId())
                         .questionId(bq.getQuestion().getId())
                         .prompt(bq.getQuestion().getPrompt())
+                        .optionA(bq.getQuestion().getOptionA())
+                        .optionB(bq.getQuestion().getOptionB())
+                        .optionC(bq.getQuestion().getOptionC())
+                        .optionD(bq.getQuestion().getOptionD())
                         .sequenceOrder(bq.getSequenceOrder())
                         .build())
                 .collect(Collectors.toList());

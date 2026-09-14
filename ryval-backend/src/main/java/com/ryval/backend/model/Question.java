@@ -21,15 +21,31 @@ public class Question {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String prompt;
 
+    @Column(nullable = false, columnDefinition = "TEXT")
+    private String optionA;
+
+    @Column(nullable = false, columnDefinition = "TEXT")
+    private String optionB;
+
+    @Column(nullable = false, columnDefinition = "TEXT")
+    private String optionC;
+
+    @Column(nullable = false, columnDefinition = "TEXT")
+    private String optionD;
+
+    // Single letter: "A", "B", "C", or "D" — matches whichever optionX holds
+    // the correct choice. Kept as a simple letter (not the option text itself)
+    // so submitAnswer() stays a trivial string comparison and options can be
+    // edited/reworded later without needing to touch correctAnswer.
+    @Column(nullable = false, length = 1)
+    private String correctAnswer;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Difficulty difficulty;
 
     @Column(nullable = false)
     private String category;
-
-    @Column(nullable = false, columnDefinition = "TEXT")
-    private String correctAnswer;
 
     public enum Difficulty {
         EASY, MEDIUM, HARD
