@@ -2,13 +2,8 @@ package com.ryval.backend.repository;
 
 import com.ryval.backend.model.MatchmakingQueue;
 import com.ryval.backend.model.User;
-import jakarta.persistence.LockModeType;
-import jakarta.persistence.QueryHint;
-import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
@@ -18,8 +13,6 @@ public interface MatchmakingQueueRepository extends JpaRepository<MatchmakingQue
     Optional<MatchmakingQueue> findByUser(User user);
     void deleteByUser(User user);
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @QueryHints({@QueryHint(name = "javax.persistence.lock.timeout", value = "3000")})
     @Query("SELECT m FROM MatchmakingQueue m WHERE m.user <> :user AND ABS(m.ratingAtQueueTime - :rating) <= :range ORDER BY m.queuedAt ASC")
-    List<MatchmakingQueue> findCandidatesForUpdate(@Param("user") User user, @Param("rating") Integer rating, @Param("range") Integer range, Pageable pageable);
+    List<MatchmakingQueue> findCandidates(@Param("user") User user, @Param("rating") Integer rating, @Param("range") Integer range);
 }
