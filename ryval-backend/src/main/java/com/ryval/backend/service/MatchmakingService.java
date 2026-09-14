@@ -6,10 +6,10 @@ import com.ryval.backend.model.User;
 import com.ryval.backend.repository.BattleRepository;
 import com.ryval.backend.repository.MatchmakingQueueRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -46,10 +46,20 @@ public class MatchmakingService {
             return Optional.of(battleRepository.save(battle));
         }
 
-        // Uses INSERT ... ON CONFLICT DO NOTHING so a near-simultaneous duplicate
-        // request from the same user is silently skipped rather than throwing a
-        // constraint-violation exception (which would poison this transaction).
-        matchmakingQueueRepository.upsertQueueEntry(user.getId(), user.getRating(), Instant.now());
+        MatchmakingQueue entry = MatchmakingQueue.builder()
+                .user(user)
+                .ratingAtQueueTime(user.getRating())
+                .build();
+
+        try {
+            matchmakingQueueRepository.save(entry);
+        } catch (DataIntegrityViolationException ex) {
+            // Two near-simultaneous join requests from the same user (e.g. frontend
+            // polling/retry, or a double-fired effect) can both pass the "delete existing
+            // entry" check before either insert commits, tripping the unique constraint
+            // on user_id. This isn't a real error — the user is already queued as a
+            // result of the other request, so just treat this call as "still queued".
+        }
 
         return Optional.empty();
     }
