@@ -7,6 +7,7 @@ import com.ryval.backend.repository.BattleRepository;
 import com.ryval.backend.repository.MatchmakingQueueRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,8 +34,10 @@ public class MatchmakingService {
 
         matchmakingQueueRepository.findByUser(user).ifPresent(matchmakingQueueRepository::delete);
 
-        List<MatchmakingQueue> candidates = matchmakingQueueRepository.findCandidates(
-                user, user.getRating(), INITIAL_RATING_RANGE);
+        // Locks the single best candidate row (FOR UPDATE) so a concurrent poll
+        // from another user can't grab the same opponent at the same time.
+        List<MatchmakingQueue> candidates = matchmakingQueueRepository.findCandidatesForUpdate(
+                user, user.getRating(), INITIAL_RATING_RANGE, PageRequest.of(0, 1));
 
         if (!candidates.isEmpty()) {
             MatchmakingQueue opponentEntry = candidates.get(0);

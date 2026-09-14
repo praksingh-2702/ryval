@@ -11,16 +11,13 @@ export default function Battle() {
 
   const [battle] = useState(location.state?.battle || null);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [answer, setAnswer] = useState("");
+  const [selectedOption, setSelectedOption] = useState(null); // "A" | "B" | "C" | "D" | null
   const [submitting, setSubmitting] = useState(false);
   const [lastResult, setLastResult] = useState(null); // { isCorrect } or null
   const [startedAt, setStartedAt] = useState(Date.now());
   const [result, setResult] = useState(null); // final BattleResponse after /end
 
   useEffect(() => {
-    // If someone lands here directly (refresh, back button) without battle
-    // data in navigation state, we have no way to recover the question list
-    // from the backend yet — send them back to the dashboard.
     if (!battle) {
       navigate("/dashboard", { replace: true });
     }
@@ -28,7 +25,7 @@ export default function Battle() {
 
   if (!battle) return null;
 
-  const questions = battle.questions; // [{battleQuestionId, questionId, prompt, sequenceOrder}]
+  const questions = battle.questions; // [{battleQuestionId, questionId, prompt, optionA..D, sequenceOrder}]
   const currentQuestion = questions[currentIndex];
   const isLastQuestion = currentIndex === questions.length - 1;
 
@@ -37,16 +34,22 @@ export default function Battle() {
       ? battle.playerTwoUsername
       : battle.playerOneUsername;
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (!answer.trim() || submitting) return;
+  const options = [
+    { key: "A", text: currentQuestion.optionA },
+    { key: "B", text: currentQuestion.optionB },
+    { key: "C", text: currentQuestion.optionC },
+    { key: "D", text: currentQuestion.optionD },
+  ];
 
+  async function handleSelect(optionKey) {
+    if (submitting || lastResult !== null) return;
+    setSelectedOption(optionKey);
     setSubmitting(true);
     try {
       const responseTimeMs = Date.now() - startedAt;
       const { data } = await api.post(`/battles/${battle.id}/answer`, {
         battleQuestionId: currentQuestion.battleQuestionId,
-        answer: answer.trim(),
+        answer: optionKey,
         responseTimeMs,
       });
       setLastResult({ isCorrect: data.isCorrect });
@@ -58,7 +61,7 @@ export default function Battle() {
   }
 
   function nextQuestion() {
-    setAnswer("");
+    setSelectedOption(null);
     setLastResult(null);
     setStartedAt(Date.now());
     setCurrentIndex((i) => i + 1);
@@ -70,9 +73,6 @@ export default function Battle() {
       const { data } = await api.post(`/battles/${battle.id}/end`);
       setResult(data);
     } catch {
-      // If ending fails (e.g. opponent hasn't answered all questions yet on
-      // the backend's side), just drop back to the dashboard — this is a
-      // known rough edge until we add a "waiting for opponent" step.
       navigate("/dashboard");
     } finally {
       setSubmitting(false);
@@ -119,28 +119,36 @@ export default function Battle() {
           {currentQuestion.prompt}
         </p>
 
-        {lastResult === null ? (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <input
-              type="text"
-              autoFocus
-              value={answer}
-              onChange={(e) => setAnswer(e.target.value)}
-              className="w-full bg-ink-raised border border-ink-line rounded-lg px-4 py-3 text-sm outline-none focus:border-violet transition-colors"
-              placeholder="Your answer"
-            />
-            <button
-              type="submit"
-              disabled={submitting || !answer.trim()}
-              className="w-full bg-violet hover:bg-violet-dim disabled:opacity-50 transition-colors text-white font-semibold py-3 rounded-lg text-sm"
-            >
-              {submitting ? "Submitting…" : "Submit answer"}
-            </button>
-          </form>
-        ) : (
-          <div>
+        <div className="space-y-3">
+          {options.map((opt) => {
+            const isSelected = selectedOption === opt.key;
+            const showFeedback = lastResult !== null && isSelected;
+
+            return (
+              <button
+                key={opt.key}
+                onClick={() => handleSelect(opt.key)}
+                disabled={submitting || lastResult !== null}
+                className={`w-full text-left border rounded-lg px-4 py-3 text-sm transition-colors disabled:cursor-not-allowed
+                  ${
+                    showFeedback && lastResult.isCorrect
+                      ? "border-gold bg-gold/10 text-gold"
+                      : showFeedback && !lastResult.isCorrect
+                      ? "border-coral bg-coral/10 text-coral"
+                      : "border-ink-line bg-ink-raised hover:border-violet"
+                  }`}
+              >
+                <span className="font-semibold mr-2">{opt.key}.</span>
+                {opt.text}
+              </button>
+            );
+          })}
+        </div>
+
+        {lastResult !== null && (
+          <div className="mt-6">
             <p
-              className={`text-sm font-medium mb-6 ${
+              className={`text-sm font-medium mb-4 ${
                 lastResult.isCorrect ? "text-gold" : "text-coral"
               }`}
             >
