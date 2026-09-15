@@ -5,6 +5,7 @@ import com.ryval.backend.dto.response.BattleResponse;
 import com.ryval.backend.model.*;
 import com.ryval.backend.repository.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,8 +21,6 @@ public class BattleService {
     private static final long QUESTION_TIMEOUT_SECONDS = 10;
     private static final long FORFEIT_GRACE_SECONDS = 30;
     private static final String TIMEOUT_MARKER = "__TIMEOUT__";
-
-    // Must match FEEDBACK_DURATION_MS in Battle.jsx.
     private static final long FEEDBACK_DELAY_MS = 1500;
 
     private final BattleRepository battleRepository;
@@ -32,19 +31,6 @@ public class BattleService {
 
     @Transactional
     public BattleResponse startBattle(Long battleId, String username) {
-        // BUG FIX: previously used a plain findById here. Two callers can
-        // both hit this method for the same battle at nearly the same time
-        // - e.g. P2's synchronous match triggers startBattle at the exact
-        // moment P1's next queue-poll discovers the same battle and also
-        // triggers startBattle. With no lock, both can read
-        // status == PENDING before either commits, and both insert their
-        // own 5 BattleQuestion rows - producing 10 total rows with
-        // duplicate sequence_order values, mismatched "current question"
-        // per player, and "Not your current question" errors later.
-        // findByIdWithLock takes a pessimistic write lock, so the second
-        // caller blocks until the first transaction commits, then sees
-        // status == IN_PROGRESS and returns immediately without touching
-        // battle_questions.
         Battle battle = battleRepository.findByIdWithLock(battleId)
                 .orElseThrow(() -> new RuntimeException("Battle not found: " + battleId));
 
@@ -52,30 +38,45 @@ public class BattleService {
             return toResponse(battle, username);
         }
 
-        List<Question> questions = questionRepository.findAll();
-        java.util.Collections.shuffle(questions);
-        List<Question> selected = questions.stream()
-                .limit(QUESTIONS_PER_BATTLE)
-                .collect(Collectors.toList());
+        // BUG FIX: even with the pessimistic lock above, defend against any
+        // remaining timing window (e.g. a request landing during a deploy
+        // rollover, before the lock fix was live) where two callers both
+        // attempt to create BattleQuestion rows for the same battle. The
+        // UNIQUE(battle_id, sequence_order) DB constraint will reject the
+        // loser's insert - previously that exception propagated straight to
+        // the player as a 500 ("Couldn't join queue" / kicked to dashboard).
+        // Now we catch it, re-read the battle (the winner's transaction has
+        // since committed), and just return its current state instead.
+        try {
+            List<Question> questions = questionRepository.findAll();
+            java.util.Collections.shuffle(questions);
+            List<Question> selected = questions.stream()
+                    .limit(QUESTIONS_PER_BATTLE)
+                    .collect(Collectors.toList());
 
-        for (int i = 0; i < selected.size(); i++) {
-            BattleQuestion bq = BattleQuestion.builder()
-                    .battle(battle)
-                    .question(selected.get(i))
-                    .sequenceOrder(i + 1)
-                    .build();
-            battleQuestionRepository.save(bq);
+            for (int i = 0; i < selected.size(); i++) {
+                BattleQuestion bq = BattleQuestion.builder()
+                        .battle(battle)
+                        .question(selected.get(i))
+                        .sequenceOrder(i + 1)
+                        .build();
+                battleQuestionRepository.saveAndFlush(bq);
+            }
+
+            Instant now = Instant.now();
+            battle.setStatus(Battle.Status.IN_PROGRESS);
+            battle.setPlayerOneQuestionIndex(0);
+            battle.setPlayerTwoQuestionIndex(0);
+            battle.setPlayerOneQuestionDeadline(now.plusSeconds(QUESTION_TIMEOUT_SECONDS));
+            battle.setPlayerTwoQuestionDeadline(now.plusSeconds(QUESTION_TIMEOUT_SECONDS));
+            battle.setPlayerOneLastSeenAt(now);
+            battle.setPlayerTwoLastSeenAt(now);
+            battleRepository.save(battle);
+        } catch (DataIntegrityViolationException ex) {
+            Battle current = battleRepository.findById(battleId)
+                    .orElseThrow(() -> new RuntimeException("Battle not found: " + battleId));
+            return toResponse(current, username);
         }
-
-        Instant now = Instant.now();
-        battle.setStatus(Battle.Status.IN_PROGRESS);
-        battle.setPlayerOneQuestionIndex(0);
-        battle.setPlayerTwoQuestionIndex(0);
-        battle.setPlayerOneQuestionDeadline(now.plusSeconds(QUESTION_TIMEOUT_SECONDS));
-        battle.setPlayerTwoQuestionDeadline(now.plusSeconds(QUESTION_TIMEOUT_SECONDS));
-        battle.setPlayerOneLastSeenAt(now);
-        battle.setPlayerTwoLastSeenAt(now);
-        battleRepository.save(battle);
 
         return toResponse(battle, username);
     }
