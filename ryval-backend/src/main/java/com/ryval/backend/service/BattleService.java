@@ -21,12 +21,7 @@ public class BattleService {
     private static final long FORFEIT_GRACE_SECONDS = 30;
     private static final String TIMEOUT_MARKER = "__TIMEOUT__";
 
-    // IMPORTANT: must match FEEDBACK_DURATION_MS in Battle.jsx. The frontend
-    // shows an inline feedback screen for this long before displaying the
-    // next question. If we start the 10s countdown the instant the answer
-    // is recorded, the player silently loses this many ms off every
-    // question's visible timer. Baking the delay into the deadline keeps
-    // the visible 10s accurate to when the question actually appears.
+    // Must match FEEDBACK_DURATION_MS in Battle.jsx.
     private static final long FEEDBACK_DELAY_MS = 1500;
 
     private final BattleRepository battleRepository;
@@ -37,7 +32,21 @@ public class BattleService {
 
     @Transactional
     public BattleResponse startBattle(Long battleId, String username) {
-        Battle battle = getBattle(battleId);
+        // BUG FIX: previously used a plain findById here. Two callers can
+        // both hit this method for the same battle at nearly the same time
+        // - e.g. P2's synchronous match triggers startBattle at the exact
+        // moment P1's next queue-poll discovers the same battle and also
+        // triggers startBattle. With no lock, both can read
+        // status == PENDING before either commits, and both insert their
+        // own 5 BattleQuestion rows - producing 10 total rows with
+        // duplicate sequence_order values, mismatched "current question"
+        // per player, and "Not your current question" errors later.
+        // findByIdWithLock takes a pessimistic write lock, so the second
+        // caller blocks until the first transaction commits, then sees
+        // status == IN_PROGRESS and returns immediately without touching
+        // battle_questions.
+        Battle battle = battleRepository.findByIdWithLock(battleId)
+                .orElseThrow(() -> new RuntimeException("Battle not found: " + battleId));
 
         if (battle.getStatus() != Battle.Status.PENDING) {
             return toResponse(battle, username);
@@ -230,10 +239,6 @@ public class BattleService {
         battleAnswerRepository.save(answer);
 
         int newIndex = (isPlayerOne ? battle.getPlayerOneQuestionIndex() : battle.getPlayerTwoQuestionIndex()) + 1;
-        // BUG FIX: add FEEDBACK_DELAY_MS so the visible 10s countdown starts
-        // when the next question actually renders on screen, not the instant
-        // this answer was recorded (which is ~1.5s before the frontend shows
-        // the next question, due to the inline feedback overlay).
         Instant newDeadline = newIndex < QUESTIONS_PER_BATTLE
                 ? Instant.now().plusMillis(FEEDBACK_DELAY_MS).plusSeconds(QUESTION_TIMEOUT_SECONDS)
                 : null;
@@ -321,11 +326,6 @@ public class BattleService {
 
     public List<Battle> getBattlesForUser(User user) {
         return battleRepository.findAllForUser(user);
-    }
-
-    private Battle getBattle(Long battleId) {
-        return battleRepository.findById(battleId)
-                .orElseThrow(() -> new RuntimeException("Battle not found: " + battleId));
     }
 
     private BattleResponse toResponse(Battle battle, String username) {
