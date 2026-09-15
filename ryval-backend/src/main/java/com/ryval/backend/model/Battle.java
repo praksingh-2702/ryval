@@ -49,6 +49,22 @@ public class Battle {
     @Builder.Default
     private boolean playerTwoFinished = false;
 
+    @Column(nullable = false)
+    @Builder.Default
+    private int playerOneQuestionIndex = 0;
+
+    @Column(nullable = false)
+    @Builder.Default
+    private int playerTwoQuestionIndex = 0;
+
+    private Instant playerOneQuestionDeadline;
+    private Instant playerTwoQuestionDeadline;
+
+    private Instant playerOneLastSeenAt;
+    private Instant playerTwoLastSeenAt;
+
+    private String endReason;
+
     @Column(updatable = false)
     private Instant createdAt;
 
