@@ -21,16 +21,16 @@ public class Question {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String prompt;
 
-    @Column(nullable = false, columnDefinition = "TEXT")
+    @Column(name = "option_a", nullable = false, columnDefinition = "TEXT")
     private String optionA;
 
-    @Column(nullable = false, columnDefinition = "TEXT")
+    @Column(name = "option_b", nullable = false, columnDefinition = "TEXT")
     private String optionB;
 
-    @Column(nullable = false, columnDefinition = "TEXT")
+    @Column(name = "option_c", nullable = false, columnDefinition = "TEXT")
     private String optionC;
 
-    @Column(nullable = false, columnDefinition = "TEXT")
+    @Column(name = "option_d", nullable = false, columnDefinition = "TEXT")
     private String optionD;
 
     // Single letter: "A", "B", "C", or "D" — matches whichever optionX holds
