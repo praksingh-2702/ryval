@@ -21,6 +21,14 @@ public class BattleService {
     private static final long FORFEIT_GRACE_SECONDS = 30;
     private static final String TIMEOUT_MARKER = "__TIMEOUT__";
 
+    // IMPORTANT: must match FEEDBACK_DURATION_MS in Battle.jsx. The frontend
+    // shows an inline feedback screen for this long before displaying the
+    // next question. If we start the 10s countdown the instant the answer
+    // is recorded, the player silently loses this many ms off every
+    // question's visible timer. Baking the delay into the deadline keeps
+    // the visible 10s accurate to when the question actually appears.
+    private static final long FEEDBACK_DELAY_MS = 1500;
+
     private final BattleRepository battleRepository;
     private final BattleQuestionRepository battleQuestionRepository;
     private final BattleAnswerRepository battleAnswerRepository;
@@ -222,8 +230,12 @@ public class BattleService {
         battleAnswerRepository.save(answer);
 
         int newIndex = (isPlayerOne ? battle.getPlayerOneQuestionIndex() : battle.getPlayerTwoQuestionIndex()) + 1;
+        // BUG FIX: add FEEDBACK_DELAY_MS so the visible 10s countdown starts
+        // when the next question actually renders on screen, not the instant
+        // this answer was recorded (which is ~1.5s before the frontend shows
+        // the next question, due to the inline feedback overlay).
         Instant newDeadline = newIndex < QUESTIONS_PER_BATTLE
-                ? Instant.now().plusSeconds(QUESTION_TIMEOUT_SECONDS)
+                ? Instant.now().plusMillis(FEEDBACK_DELAY_MS).plusSeconds(QUESTION_TIMEOUT_SECONDS)
                 : null;
 
         if (isPlayerOne) {
