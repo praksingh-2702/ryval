@@ -31,7 +31,7 @@ public class BattleController {
         Optional<Battle> battle = matchmakingService.joinQueue(user);
 
         if (battle.isPresent()) {
-            return ResponseEntity.ok(battleService.startBattle(battle.get().getId()));
+            return ResponseEntity.ok(battleService.startBattle(battle.get().getId(), authentication.getName()));
         }
         return ResponseEntity.ok(Map.of("status", "QUEUED"));
     }
@@ -43,13 +43,36 @@ public class BattleController {
         return ResponseEntity.noContent().build();
     }
 
+    // Full battle state, personalized to the requester (their current
+    // question index, their countdown deadline, whether they/opponent have
+    // finished). Used both as the live poll during a battle and to
+    // reconstruct state after a page refresh.
+    @GetMapping("/{battleId}")
+    public ResponseEntity<BattleResponse> getBattleState(
+            @PathVariable Long battleId,
+            Authentication authentication
+    ) {
+        return ResponseEntity.ok(battleService.getBattleState(battleId, authentication.getName()));
+    }
+
     @PostMapping("/{battleId}/answer")
-    public ResponseEntity<?> submitAnswer(
+    public ResponseEntity<BattleResponse> submitAnswer(
             @PathVariable Long battleId,
             @RequestBody SubmitAnswerRequest request,
             Authentication authentication
     ) {
         return ResponseEntity.ok(battleService.submitAnswer(authentication.getName(), request));
+    }
+
+    // Called by the frontend when a player's local countdown for their
+    // current question hits zero. The backend independently verifies the
+    // deadline has actually passed before honoring it.
+    @PostMapping("/{battleId}/skip")
+    public ResponseEntity<BattleResponse> skipQuestion(
+            @PathVariable Long battleId,
+            Authentication authentication
+    ) {
+        return ResponseEntity.ok(battleService.skipQuestion(battleId, authentication.getName()));
     }
 
     @PostMapping("/{battleId}/end")

@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -16,6 +17,9 @@ import java.util.stream.Collectors;
 public class BattleService {
 
     private static final int QUESTIONS_PER_BATTLE = 5;
+    private static final long QUESTION_TIMEOUT_SECONDS = 10;
+    private static final long FORFEIT_GRACE_SECONDS = 30;
+    private static final String TIMEOUT_MARKER = "__TIMEOUT__";
 
     private final BattleRepository battleRepository;
     private final BattleQuestionRepository battleQuestionRepository;
@@ -24,11 +28,11 @@ public class BattleService {
     private final UserRepository userRepository;
 
     @Transactional
-    public BattleResponse startBattle(Long battleId) {
+    public BattleResponse startBattle(Long battleId, String username) {
         Battle battle = getBattle(battleId);
 
         if (battle.getStatus() != Battle.Status.PENDING) {
-            return toResponse(battle);
+            return toResponse(battle, username);
         }
 
         List<Question> questions = questionRepository.findAll();
@@ -46,41 +50,128 @@ public class BattleService {
             battleQuestionRepository.save(bq);
         }
 
+        Instant now = Instant.now();
         battle.setStatus(Battle.Status.IN_PROGRESS);
+        battle.setPlayerOneQuestionIndex(0);
+        battle.setPlayerTwoQuestionIndex(0);
+        battle.setPlayerOneQuestionDeadline(now.plusSeconds(QUESTION_TIMEOUT_SECONDS));
+        battle.setPlayerTwoQuestionDeadline(now.plusSeconds(QUESTION_TIMEOUT_SECONDS));
+        battle.setPlayerOneLastSeenAt(now);
+        battle.setPlayerTwoLastSeenAt(now);
         battleRepository.save(battle);
 
-        return toResponse(battle);
+        return toResponse(battle, username);
     }
 
     @Transactional
-    public BattleAnswer submitAnswer(String username, SubmitAnswerRequest request) {
+    public BattleResponse submitAnswer(String username, SubmitAnswerRequest request) {
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
         BattleQuestion battleQuestion = battleQuestionRepository.findById(request.getBattleQuestionId())
                 .orElseThrow(() -> new RuntimeException("Battle question not found"));
 
+        Battle battle = battleRepository.findByIdWithLock(battleQuestion.getBattle().getId())
+                .orElseThrow(() -> new RuntimeException("Battle not found"));
+
+        checkAndApplyForfeit(battle);
+        touchLastSeen(battle, user);
+
+        if (battle.getStatus() != Battle.Status.IN_PROGRESS) {
+            return toResponse(battle, username);
+        }
+
+        boolean isPlayerOne = battle.getPlayerOne().getId().equals(user.getId());
+        if (isPlayerOne ? battle.isPlayerOneFinished() : battle.isPlayerTwoFinished()) {
+            return toResponse(battle, username);
+        }
+
+        if (battleAnswerRepository.findByBattleQuestionAndUser(battleQuestion, user).isPresent()) {
+            return toResponse(battle, username);
+        }
+
+        int currentIndex = isPlayerOne ? battle.getPlayerOneQuestionIndex() : battle.getPlayerTwoQuestionIndex();
+        if (battleQuestion.getSequenceOrder() - 1 != currentIndex) {
+            throw new RuntimeException("Not your current question");
+        }
+
         boolean isCorrect = battleQuestion.getQuestion().getCorrectAnswer()
                 .trim().equalsIgnoreCase(request.getAnswer().trim());
 
-        BattleAnswer answer = BattleAnswer.builder()
-                .battleQuestion(battleQuestion)
-                .user(user)
-                .submittedAnswer(request.getAnswer())
-                .isCorrect(isCorrect)
-                .responseTimeMs(request.getResponseTimeMs())
-                .build();
+        recordAnswerAndAdvance(battle, user, isPlayerOne, battleQuestion,
+                request.getAnswer(), isCorrect, request.getResponseTimeMs());
 
-        return battleAnswerRepository.save(answer);
+        return toResponse(battle, username);
+    }
+
+    @Transactional
+    public BattleResponse skipQuestion(Long battleId, String username) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        Battle battle = battleRepository.findByIdWithLock(battleId)
+                .orElseThrow(() -> new RuntimeException("Battle not found: " + battleId));
+
+        checkAndApplyForfeit(battle);
+        touchLastSeen(battle, user);
+
+        if (battle.getStatus() != Battle.Status.IN_PROGRESS) {
+            return toResponse(battle, username);
+        }
+
+        boolean isPlayerOne = battle.getPlayerOne().getId().equals(user.getId());
+        if (isPlayerOne ? battle.isPlayerOneFinished() : battle.isPlayerTwoFinished()) {
+            return toResponse(battle, username);
+        }
+
+        int currentIndex = isPlayerOne ? battle.getPlayerOneQuestionIndex() : battle.getPlayerTwoQuestionIndex();
+        List<BattleQuestion> battleQuestions = battleQuestionRepository.findByBattleOrderBySequenceOrderAsc(battle);
+        if (currentIndex >= battleQuestions.size()) {
+            return toResponse(battle, username);
+        }
+        BattleQuestion current = battleQuestions.get(currentIndex);
+
+        if (battleAnswerRepository.findByBattleQuestionAndUser(current, user).isPresent()) {
+            return toResponse(battle, username);
+        }
+
+        Instant deadline = isPlayerOne ? battle.getPlayerOneQuestionDeadline() : battle.getPlayerTwoQuestionDeadline();
+        if (deadline != null && Instant.now().isBefore(deadline)) {
+            return toResponse(battle, username);
+        }
+
+        recordAnswerAndAdvance(battle, user, isPlayerOne, current, TIMEOUT_MARKER, false, null);
+
+        return toResponse(battle, username);
+    }
+
+    @Transactional
+    public BattleResponse getBattleState(Long battleId, String username) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        Battle battle = battleRepository.findByIdWithLock(battleId)
+                .orElseThrow(() -> new RuntimeException("Battle not found: " + battleId));
+
+        checkAndApplyForfeit(battle);
+        touchLastSeen(battle, user);
+
+        return toResponse(battle, username);
     }
 
     @Transactional
     public BattleResponse endBattle(Long battleId, String username) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
         Battle battle = battleRepository.findByIdWithLock(battleId)
                 .orElseThrow(() -> new RuntimeException("Battle not found: " + battleId));
 
+        checkAndApplyForfeit(battle);
+        touchLastSeen(battle, user);
+
         if (battle.getStatus() == Battle.Status.COMPLETED) {
-            return toResponse(battle);
+            return toResponse(battle, username);
         }
 
         boolean isPlayerOne = battle.getPlayerOne().getUsername().equals(username);
@@ -92,7 +183,7 @@ public class BattleService {
         battleRepository.save(battle);
 
         if (!battle.isPlayerOneFinished() || !battle.isPlayerTwoFinished()) {
-            return toResponse(battle);
+            return toResponse(battle, username);
         }
 
         List<BattleQuestion> battleQuestions =
@@ -110,12 +201,82 @@ public class BattleService {
 
         battle.setWinner(winner);
         battle.setStatus(Battle.Status.COMPLETED);
-        battle.setEndedAt(java.time.Instant.now());
+        battle.setEndedAt(Instant.now());
+        battle.setEndReason("NORMAL");
         battleRepository.save(battle);
 
         updateRatingsAndRecord(battle, winner);
 
-        return toResponse(battle);
+        return toResponse(battle, username);
+    }
+
+    private void recordAnswerAndAdvance(Battle battle, User user, boolean isPlayerOne, BattleQuestion question,
+                                         String submittedAnswer, boolean isCorrect, Long responseTimeMs) {
+        BattleAnswer answer = BattleAnswer.builder()
+                .battleQuestion(question)
+                .user(user)
+                .submittedAnswer(submittedAnswer)
+                .isCorrect(isCorrect)
+                .responseTimeMs(responseTimeMs)
+                .build();
+        battleAnswerRepository.save(answer);
+
+        int newIndex = (isPlayerOne ? battle.getPlayerOneQuestionIndex() : battle.getPlayerTwoQuestionIndex()) + 1;
+        Instant newDeadline = newIndex < QUESTIONS_PER_BATTLE
+                ? Instant.now().plusSeconds(QUESTION_TIMEOUT_SECONDS)
+                : null;
+
+        if (isPlayerOne) {
+            battle.setPlayerOneQuestionIndex(newIndex);
+            battle.setPlayerOneQuestionDeadline(newDeadline);
+        } else {
+            battle.setPlayerTwoQuestionIndex(newIndex);
+            battle.setPlayerTwoQuestionDeadline(newDeadline);
+        }
+        battleRepository.save(battle);
+    }
+
+    private void checkAndApplyForfeit(Battle battle) {
+        if (battle.getStatus() != Battle.Status.IN_PROGRESS) {
+            return;
+        }
+        Instant now = Instant.now();
+
+        if (battle.isPlayerTwoFinished() && !battle.isPlayerOneFinished()) {
+            Instant reference = battle.getPlayerOneLastSeenAt() != null
+                    ? battle.getPlayerOneLastSeenAt() : battle.getCreatedAt();
+            if (reference != null && !now.isBefore(reference.plusSeconds(FORFEIT_GRACE_SECONDS))) {
+                applyForfeit(battle, battle.getPlayerTwo());
+                return;
+            }
+        }
+
+        if (battle.isPlayerOneFinished() && !battle.isPlayerTwoFinished()) {
+            Instant reference = battle.getPlayerTwoLastSeenAt() != null
+                    ? battle.getPlayerTwoLastSeenAt() : battle.getCreatedAt();
+            if (reference != null && !now.isBefore(reference.plusSeconds(FORFEIT_GRACE_SECONDS))) {
+                applyForfeit(battle, battle.getPlayerOne());
+            }
+        }
+    }
+
+    private void applyForfeit(Battle battle, User winner) {
+        battle.setWinner(winner);
+        battle.setStatus(Battle.Status.COMPLETED);
+        battle.setEndedAt(Instant.now());
+        battle.setEndReason("FORFEIT");
+        battleRepository.save(battle);
+        updateRatingsAndRecord(battle, winner);
+    }
+
+    private void touchLastSeen(Battle battle, User user) {
+        boolean isPlayerOne = battle.getPlayerOne().getId().equals(user.getId());
+        if (isPlayerOne) {
+            battle.setPlayerOneLastSeenAt(Instant.now());
+        } else {
+            battle.setPlayerTwoLastSeenAt(Instant.now());
+        }
+        battleRepository.save(battle);
     }
 
     private long countCorrect(List<BattleQuestion> battleQuestions, User user) {
@@ -155,24 +316,38 @@ public class BattleService {
                 .orElseThrow(() -> new RuntimeException("Battle not found: " + battleId));
     }
 
-    private BattleResponse toResponse(Battle battle) {
+    private BattleResponse toResponse(Battle battle, String username) {
         List<BattleQuestion> battleQuestions =
                 battleQuestionRepository.findByBattleOrderBySequenceOrderAsc(battle);
 
+        User requester = username != null ? userRepository.findByUsername(username).orElse(null) : null;
+        boolean isPlayerOne = requester != null && battle.getPlayerOne().getId().equals(requester.getId());
+
+        User finalRequester = requester;
         List<BattleResponse.QuestionSummary> summaries = battleQuestions.stream()
-                .map(bq -> BattleResponse.QuestionSummary.builder()
-                        .battleQuestionId(bq.getId())
-                        .questionId(bq.getQuestion().getId())
-                        .prompt(bq.getQuestion().getPrompt())
-                        .optionA(bq.getQuestion().getOptionA())
-                        .optionB(bq.getQuestion().getOptionB())
-                        .optionC(bq.getQuestion().getOptionC())
-                        .optionD(bq.getQuestion().getOptionD())
-                        .sequenceOrder(bq.getSequenceOrder())
-                        .build())
+                .map(bq -> {
+                    BattleResponse.QuestionSummary.QuestionSummaryBuilder builder = BattleResponse.QuestionSummary.builder()
+                            .battleQuestionId(bq.getId())
+                            .questionId(bq.getQuestion().getId())
+                            .prompt(bq.getQuestion().getPrompt())
+                            .optionA(bq.getQuestion().getOptionA())
+                            .optionB(bq.getQuestion().getOptionB())
+                            .optionC(bq.getQuestion().getOptionC())
+                            .optionD(bq.getQuestion().getOptionD())
+                            .sequenceOrder(bq.getSequenceOrder());
+
+                    if (finalRequester != null) {
+                        battleAnswerRepository.findByBattleQuestionAndUser(bq, finalRequester).ifPresent(ans ->
+                                builder.myAnswer(ans.getSubmittedAnswer())
+                                        .myAnswerCorrect(ans.getIsCorrect())
+                                        .myAnswerWasTimeout(TIMEOUT_MARKER.equals(ans.getSubmittedAnswer())));
+                    }
+
+                    return builder.build();
+                })
                 .collect(Collectors.toList());
 
-        return BattleResponse.builder()
+        BattleResponse.BattleResponseBuilder response = BattleResponse.builder()
                 .id(battle.getId())
                 .playerOneId(battle.getPlayerOne().getId())
                 .playerOneUsername(battle.getPlayerOne().getUsername())
@@ -180,9 +355,23 @@ public class BattleService {
                 .playerTwoUsername(battle.getPlayerTwo().getUsername())
                 .winnerId(battle.getWinner() != null ? battle.getWinner().getId() : null)
                 .status(battle.getStatus().name())
+                .endReason(battle.getEndReason())
                 .createdAt(battle.getCreatedAt())
                 .endedAt(battle.getEndedAt())
-                .questions(summaries)
-                .build();
+                .questions(summaries);
+
+        if (requester != null) {
+            boolean myFinished = isPlayerOne ? battle.isPlayerOneFinished() : battle.isPlayerTwoFinished();
+            boolean opponentFinished = isPlayerOne ? battle.isPlayerTwoFinished() : battle.isPlayerOneFinished();
+            Integer myIndex = isPlayerOne ? battle.getPlayerOneQuestionIndex() : battle.getPlayerTwoQuestionIndex();
+            Instant myDeadline = isPlayerOne ? battle.getPlayerOneQuestionDeadline() : battle.getPlayerTwoQuestionDeadline();
+
+            response.myFinished(myFinished)
+                    .opponentFinished(opponentFinished)
+                    .myQuestionIndex(myIndex)
+                    .myQuestionDeadline(myFinished ? null : myDeadline);
+        }
+
+        return response.build();
     }
 }
