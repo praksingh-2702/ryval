@@ -12,6 +12,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -20,10 +21,8 @@ import java.util.Optional;
 public class MatchmakingService {
 
     private static final int INITIAL_RATING_RANGE = 100;
-
-    // Arbitrary constant key for the advisory lock. Only used to serialize
-    // matchmaking decisions - not tied to any real entity ID.
     private static final long MATCHMAKING_LOCK_KEY = 927364;
+    private static final long STALE_BATTLE_SECONDS = 300; // 5 minutes
 
     private final MatchmakingQueueRepository matchmakingQueueRepository;
     private final BattleRepository battleRepository;
@@ -35,18 +34,18 @@ public class MatchmakingService {
     public Optional<Battle> joinQueue(User user) {
         Optional<Battle> existing = battleRepository.findActiveBattleForUser(user);
         if (existing.isPresent()) {
-            return existing;
+            Battle b = existing.get();
+            boolean isStale = b.getCreatedAt() != null &&
+                    b.getCreatedAt().isBefore(Instant.now().minusSeconds(STALE_BATTLE_SECONDS));
+            if (!isStale) {
+                return existing;
+            }
+            b.setStatus(Battle.Status.COMPLETED);
+            b.setEndedAt(Instant.now());
+            b.setEndReason("FORFEIT");
+            battleRepository.save(b);
         }
 
-        // Postgres advisory transaction lock: blocks any other joinQueue call
-        // (for ANY user) from proceeding past this line until this transaction
-        // commits or rolls back. Without this, two users polling within
-        // milliseconds of each other can each independently see the other as
-        // "the candidate to match with" and both create a separate Battle row
-        // for the same pair - row-level FOR UPDATE locks don't prevent this,
-        // since each transaction locks a DIFFERENT row (the other user's row).
-        // This fully serializes the match-or-queue decision so only one
-        // Battle can ever be created per pair.
         entityManager.createNativeQuery("SELECT pg_advisory_xact_lock(:key)")
                 .setParameter("key", MATCHMAKING_LOCK_KEY)
                 .getSingleResult();

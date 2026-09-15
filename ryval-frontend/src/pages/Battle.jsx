@@ -6,6 +6,7 @@ import { useAuth } from "../context/AuthContext";
 const POLL_INTERVAL_MS = 2000;
 const TICK_MS = 250;
 const QUESTION_SECONDS = 10;
+const FEEDBACK_DURATION_MS = 1500;
 
 export default function Battle() {
   const { battleId } = useParams();
@@ -18,35 +19,30 @@ export default function Battle() {
   const [data, setData] = useState(location.state?.battle || null);
   const [selectedOption, setSelectedOption] = useState(null);
   const [submitting, setSubmitting] = useState(false);
-  const [feedback, setFeedback] = useState(null);
-
+  const [feedback, setFeedback] = useState(null); // { isCorrect, label } shown inline
   const [now, setNow] = useState(Date.now());
+
   const skippedIndexRef = useRef(null);
   const startedAtRef = useRef(Date.now());
   const finishingRef = useRef(false);
+  const feedbackTimerRef = useRef(null);
 
+  // Initial load if no state passed
   useEffect(() => {
     if (data) return;
     let cancelled = false;
     (async () => {
       try {
         const { data: fetched } = await api.get(`/battles/${battleId}`);
-        if (!cancelled) {
-          setData(fetched);
-          setLoading(false);
-        }
+        if (!cancelled) { setData(fetched); setLoading(false); }
       } catch {
-        if (!cancelled) {
-          setLoadError(true);
-          setLoading(false);
-        }
+        if (!cancelled) { setLoadError(true); setLoading(false); }
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [battleId, data]);
 
+  // Poll for opponent state and battle completion
   useEffect(() => {
     if (!data || data.status === "COMPLETED") return;
     let cancelled = false;
@@ -56,35 +52,60 @@ export default function Battle() {
         if (cancelled) return;
         setData((prev) => {
           if (prev && fresh.myQuestionIndex !== prev.myQuestionIndex) {
-            setSelectedOption(null);
             startedAtRef.current = Date.now();
             skippedIndexRef.current = null;
           }
           return fresh;
         });
-      } catch {
-        // transient — keep polling
-      }
+      } catch { /* transient */ }
     }, POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
+    return () => { cancelled = true; clearInterval(interval); };
   }, [battleId, data?.status]);
 
+  // Countdown tick
   useEffect(() => {
-    if (!data || data.myFinished || data.status === "COMPLETED") return;
+    if (!data || data.myFinished || data.status === "COMPLETED" || feedback) return;
     const tick = setInterval(() => setNow(Date.now()), TICK_MS);
     return () => clearInterval(tick);
-  }, [data?.myFinished, data?.status]);
+  }, [data?.myFinished, data?.status, feedback]);
 
   const deadlineMs = data?.myQuestionDeadline ? new Date(data.myQuestionDeadline).getTime() : null;
   const remainingMs = deadlineMs !== null ? Math.max(0, deadlineMs - now) : null;
 
+  // Clear feedback timer on unmount
+  useEffect(() => () => { if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current); }, []);
+
+  function showFeedbackThenAdvance(freshData, label, isCorrect) {
+    setFeedback({ label, isCorrect });
+    setData(freshData);
+    setSelectedOption(null);
+
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(async () => {
+      setFeedback(null);
+      startedAtRef.current = Date.now();
+
+      const justFinished = freshData.myFinished;
+      if (justFinished) {
+        if (finishingRef.current) return;
+        finishingRef.current = true;
+        try {
+          const { data: ended } = await api.post(`/battles/${battleId}/end`);
+          setData(ended);
+        } catch {
+          navigate("/dashboard");
+        } finally {
+          finishingRef.current = false;
+        }
+      }
+    }, FEEDBACK_DURATION_MS);
+  }
+
+  // Auto-submit or skip on timer expiry
   useEffect(() => {
     if (remainingMs === null || remainingMs > 0) return;
     if (!data || data.myFinished || data.status === "COMPLETED") return;
-    if (submitting) return;
+    if (submitting || feedback) return;
     if (skippedIndexRef.current === data.myQuestionIndex) return;
     skippedIndexRef.current = data.myQuestionIndex;
 
@@ -93,35 +114,28 @@ export default function Battle() {
 
     (async () => {
       try {
-        let fresh;
         if (pendingSelection) {
           const responseTimeMs = Date.now() - startedAtRef.current;
-          const res = await api.post(`/battles/${battleId}/answer`, {
+          const { data: fresh } = await api.post(`/battles/${battleId}/answer`, {
             battleQuestionId: currentQuestion.battleQuestionId,
             answer: pendingSelection,
             responseTimeMs,
           });
-          fresh = res.data;
-          const answered = fresh.questions.find(
-            (q) => q.battleQuestionId === currentQuestion.battleQuestionId
-          );
-          setFeedback({ isCorrect: !!answered?.myAnswerCorrect, autoSubmitted: true });
+          const answered = fresh.questions.find(q => q.battleQuestionId === currentQuestion.battleQuestionId);
+          const correct = !!answered?.myAnswerCorrect;
+          showFeedbackThenAdvance(fresh, correct ? "Time's up — your pick was correct!" : "Time's up — not correct.", correct);
         } else {
-          const res = await api.post(`/battles/${battleId}/skip`);
-          fresh = res.data;
-          setFeedback({ isCorrect: false, timeout: true });
+          const { data: fresh } = await api.post(`/battles/${battleId}/skip`);
+          showFeedbackThenAdvance(fresh, "Time's up — question skipped.", false);
         }
-        setSelectedOption(null);
-        startedAtRef.current = Date.now();
-        setData(fresh);
       } catch {
         skippedIndexRef.current = null;
       }
     })();
-  }, [remainingMs, battleId, data, submitting, selectedOption]);
+  }, [remainingMs, battleId, data, submitting, feedback, selectedOption]);
 
   async function handleSubmit() {
-    if (submitting || !selectedOption || !data) return;
+    if (submitting || !selectedOption || !data || feedback) return;
     setSubmitting(true);
     const currentQuestion = data.questions[data.myQuestionIndex];
     try {
@@ -131,71 +145,40 @@ export default function Battle() {
         answer: selectedOption,
         responseTimeMs,
       });
-      const answered = fresh.questions.find(
-        (q) => q.battleQuestionId === currentQuestion.battleQuestionId
-      );
-      setFeedback({ isCorrect: !!answered?.myAnswerCorrect });
-      setSelectedOption(null);
-      startedAtRef.current = Date.now();
-      setData(fresh);
+      const answered = fresh.questions.find(q => q.battleQuestionId === currentQuestion.battleQuestionId);
+      const correct = !!answered?.myAnswerCorrect;
+      showFeedbackThenAdvance(fresh, correct ? "Correct!" : "Not quite.", correct);
     } catch {
-      setFeedback({ isCorrect: false, error: true });
+      showFeedbackThenAdvance(data, "Couldn't submit — moving on.", false);
     } finally {
       setSubmitting(false);
     }
   }
 
-  async function finishBattle() {
-    if (finishingRef.current) return;
-    finishingRef.current = true;
-    setSubmitting(true);
-    try {
-      const { data: fresh } = await api.post(`/battles/${battleId}/end`);
-      setData(fresh);
-    } catch {
-      navigate("/dashboard");
-    } finally {
-      setSubmitting(false);
-      finishingRef.current = false;
-    }
-  }
+  if (loading) return (
+    <div className="min-h-screen bg-ink text-paper flex items-center justify-center">
+      <p className="text-sm text-muted">Loading battle…</p>
+    </div>
+  );
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-ink text-paper flex items-center justify-center">
-        <p className="text-sm text-muted">Loading battle…</p>
+  if (loadError || !data) return (
+    <div className="min-h-screen bg-ink text-paper flex items-center justify-center px-6">
+      <div className="text-center max-w-sm">
+        <p className="font-display text-xl font-semibold mb-4">Couldn't load that battle.</p>
+        <button onClick={() => navigate("/dashboard")} className="text-sm text-muted hover:text-paper transition-colors">
+          Back to dashboard
+        </button>
       </div>
-    );
-  }
+    </div>
+  );
 
-  if (loadError || !data) {
-    return (
-      <div className="min-h-screen bg-ink text-paper flex items-center justify-center px-6">
-        <div className="text-center max-w-sm">
-          <p className="font-display text-xl font-semibold mb-4">
-            Couldn't load that battle.
-          </p>
-          <button
-            onClick={() => navigate("/dashboard")}
-            className="text-sm text-muted hover:text-paper transition-colors"
-          >
-            Back to dashboard
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const opponentUsername =
-    data.playerOneUsername === user?.username
-      ? data.playerTwoUsername
-      : data.playerOneUsername;
+  const opponentUsername = data.playerOneUsername === user?.username
+    ? data.playerTwoUsername : data.playerOneUsername;
 
   if (data.status === "COMPLETED") {
     const won = data.winnerId && user && data.winnerId === Number(user.userId);
     const draw = !data.winnerId;
     const forfeited = data.endReason === "FORFEIT";
-
     return (
       <div className="min-h-screen bg-ink text-paper flex items-center justify-center px-6">
         <div className="text-center max-w-sm">
@@ -203,15 +186,11 @@ export default function Battle() {
             {draw ? "Draw" : won ? "You won" : "You lost"}
           </p>
           <p className="text-sm text-muted mb-2">
-            {won && "+20 rating"}
-            {!won && !draw && "-20 rating"}
-            {draw && "No rating change"}
+            {won ? "+20 rating" : draw ? "No rating change" : "-20 rating"}
           </p>
           {forfeited && (
             <p className="text-sm text-muted mb-6">
-              {won
-                ? `${opponentUsername} didn't finish the battle.`
-                : "You didn't finish in time."}
+              {won ? `${opponentUsername} didn't finish in time.` : "You didn't finish in time."}
             </p>
           )}
           <button
@@ -229,13 +208,8 @@ export default function Battle() {
     return (
       <div className="min-h-screen bg-ink text-paper flex items-center justify-center px-6">
         <div className="text-center max-w-sm">
-          <p className="font-display text-2xl font-semibold mb-2">
-            Waiting for {opponentUsername}…
-          </p>
-          <p className="text-sm text-muted">
-            You've finished all your questions. Results appear once your opponent
-            is done.
-          </p>
+          <p className="font-display text-2xl font-semibold mb-2">Waiting for {opponentUsername}…</p>
+          <p className="text-sm text-muted">Results appear once your opponent is done.</p>
         </div>
       </div>
     );
@@ -245,43 +219,6 @@ export default function Battle() {
   const currentIndex = data.myQuestionIndex;
   const currentQuestion = questions[currentIndex];
   const secondsLeft = remainingMs !== null ? Math.ceil(remainingMs / 1000) : null;
-
-  if (feedback) {
-    const justFinished = currentIndex >= questions.length;
-    return (
-      <div className="min-h-screen bg-ink text-paper flex items-center justify-center px-6">
-        <div className="w-full max-w-lg text-center">
-          <p
-            className={`text-sm font-medium mb-6 ${
-              feedback.isCorrect ? "text-gold" : "text-coral"
-            }`}
-          >
-            {feedback.error
-              ? "Couldn't submit that — moving on."
-              : feedback.timeout
-              ? "Time's up — question skipped."
-              : feedback.autoSubmitted
-              ? feedback.isCorrect
-                ? "Time's up — your pick was correct!"
-                : "Time's up — your pick wasn't correct."
-              : feedback.isCorrect
-              ? "Correct!"
-              : "Not quite."}
-          </p>
-          <button
-            onClick={() => {
-              setFeedback(null);
-              if (justFinished) finishBattle();
-            }}
-            disabled={submitting}
-            className="bg-paper text-ink hover:bg-violet hover:text-white disabled:opacity-50 transition-colors font-semibold px-6 py-3 rounded-lg text-sm"
-          >
-            {submitting ? "…" : justFinished ? "Finish battle" : "Next question"}
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   const options = currentQuestion && [
     { key: "A", text: currentQuestion.optionA },
@@ -295,12 +232,10 @@ export default function Battle() {
       <div className="w-full max-w-lg">
         <div className="flex items-center justify-between mb-4 text-sm text-muted">
           <span>vs {opponentUsername}</span>
-          <span>
-            Question {currentIndex + 1} / {questions.length}
-          </span>
+          <span>Question {currentIndex + 1} / {questions.length}</span>
         </div>
 
-        {secondsLeft !== null && (
+        {!feedback && secondsLeft !== null && (
           <div className="mb-6">
             <div className="h-1 w-full bg-ink-raised rounded-full overflow-hidden">
               <div
@@ -312,21 +247,25 @@ export default function Battle() {
           </div>
         )}
 
-        <p className="font-display text-2xl font-semibold mb-8">
-          {currentQuestion?.prompt}
-        </p>
+        <p className="font-display text-2xl font-semibold mb-8">{currentQuestion?.prompt}</p>
 
         <div className="space-y-3">
           {options?.map((opt) => {
             const isSelected = selectedOption === opt.key;
+            const isAnswered = feedback !== null;
+            const wasMyAnswer = isAnswered && selectedOption === opt.key;
+
             return (
               <button
                 key={opt.key}
-                onClick={() => setSelectedOption(opt.key)}
-                disabled={submitting}
+                onClick={() => !feedback && setSelectedOption(opt.key)}
+                disabled={submitting || !!feedback}
                 className={`w-full text-left border rounded-lg px-4 py-3 text-sm transition-colors disabled:cursor-not-allowed
-                  ${
-                    isSelected
+                  ${isAnswered && wasMyAnswer
+                    ? feedback.isCorrect
+                      ? "border-green-500 bg-green-500/10 text-paper"
+                      : "border-coral bg-coral/10 text-paper"
+                    : isSelected
                       ? "border-violet bg-violet/10 text-paper"
                       : "border-ink-line bg-ink-raised hover:border-violet"
                   }`}
@@ -338,13 +277,19 @@ export default function Battle() {
           })}
         </div>
 
-        <button
-          onClick={handleSubmit}
-          disabled={submitting || !selectedOption}
-          className="w-full mt-6 bg-paper text-ink hover:bg-violet hover:text-white disabled:opacity-40 transition-colors font-semibold py-3 rounded-lg text-sm"
-        >
-          {submitting ? "Submitting…" : "Submit answer"}
-        </button>
+        {feedback ? (
+          <p className={`mt-6 text-sm font-medium text-center ${feedback.isCorrect ? "text-green-400" : "text-coral"}`}>
+            {feedback.label}
+          </p>
+        ) : (
+          <button
+            onClick={handleSubmit}
+            disabled={submitting || !selectedOption}
+            className="w-full mt-6 bg-paper text-ink hover:bg-violet hover:text-white disabled:opacity-40 transition-colors font-semibold py-3 rounded-lg text-sm"
+          >
+            {submitting ? "Submitting…" : "Submit answer"}
+          </button>
+        )}
       </div>
     </div>
   );
