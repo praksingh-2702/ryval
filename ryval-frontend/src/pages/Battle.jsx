@@ -85,9 +85,6 @@ export default function Battle() {
       setFeedback(null);
       startedAtRef.current = Date.now();
 
-      // BUG FIX: freshData.myFinished is never true here — /answer and /skip
-      // never set it, only /end does. Detect "just answered the last
-      // question" by comparing the index to the question count instead.
       const justFinished = freshData.myQuestionIndex >= freshData.questions.length;
       if (justFinished) {
         if (finishingRef.current) return;
@@ -132,6 +129,8 @@ export default function Battle() {
           showFeedbackThenAdvance(fresh, "Time's up — question skipped.", false);
         }
       } catch {
+        // Genuinely failed to record - allow retry on the next tick rather
+        // than faking progress. skippedIndexRef reset lets this fire again.
         skippedIndexRef.current = null;
       }
     })();
@@ -152,7 +151,32 @@ export default function Battle() {
       const correct = !!answered?.myAnswerCorrect;
       showFeedbackThenAdvance(fresh, correct ? "Correct!" : "Not quite.", correct);
     } catch {
-      showFeedbackThenAdvance(data, "Couldn't submit — moving on.", false);
+      // BUG FIX: this used to call showFeedbackThenAdvance(data, ...) -
+      // reusing the stale pre-submit `data`, whose myQuestionIndex never
+      // changes. That made the UI re-render the exact same question every
+      // time, forever, whenever the POST failed for any reason (including
+      // the "Not your current question" error caused by the startBattle
+      // race - now fixed separately). Instead, re-sync with the server's
+      // actual state and only fabricate feedback if the answer genuinely
+      // did land server-side (e.g. the response was lost after the write
+      // succeeded).
+      try {
+        const { data: fresh } = await api.get(`/battles/${battleId}`);
+        const answered = fresh.questions.find(q => q.battleQuestionId === currentQuestion.battleQuestionId);
+        if (answered?.myAnswer) {
+          showFeedbackThenAdvance(
+            fresh,
+            answered.myAnswerCorrect ? "Correct!" : "Not quite.",
+            !!answered.myAnswerCorrect
+          );
+        } else {
+          // Answer wasn't recorded. Resync (the battle may have changed
+          // underneath us) and let the player try again.
+          setData(fresh);
+        }
+      } catch {
+        // Backend unreachable — leave state as-is, the poll loop retries.
+      }
     } finally {
       setSubmitting(false);
     }
@@ -221,10 +245,6 @@ export default function Battle() {
   const questions = data.questions;
   const currentIndex = data.myQuestionIndex;
 
-  // BUG FIX: guard against the transient window where myQuestionIndex has
-  // advanced past the last question but /end hasn't resolved yet (or the
-  // poll hasn't caught up). Without this, questions[currentIndex] is
-  // undefined and the UI renders a dead "Question 6/5" screen.
   if (currentIndex >= questions.length) {
     return (
       <div className="min-h-screen bg-ink text-paper flex items-center justify-center px-6">
