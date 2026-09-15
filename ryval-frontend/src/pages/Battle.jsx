@@ -85,7 +85,10 @@ export default function Battle() {
       setFeedback(null);
       startedAtRef.current = Date.now();
 
-      const justFinished = freshData.myFinished;
+      // BUG FIX: freshData.myFinished is never true here — /answer and /skip
+      // never set it, only /end does. Detect "just answered the last
+      // question" by comparing the index to the question count instead.
+      const justFinished = freshData.myQuestionIndex >= freshData.questions.length;
       if (justFinished) {
         if (finishingRef.current) return;
         finishingRef.current = true;
@@ -217,6 +220,19 @@ export default function Battle() {
 
   const questions = data.questions;
   const currentIndex = data.myQuestionIndex;
+
+  // BUG FIX: guard against the transient window where myQuestionIndex has
+  // advanced past the last question but /end hasn't resolved yet (or the
+  // poll hasn't caught up). Without this, questions[currentIndex] is
+  // undefined and the UI renders a dead "Question 6/5" screen.
+  if (currentIndex >= questions.length) {
+    return (
+      <div className="min-h-screen bg-ink text-paper flex items-center justify-center px-6">
+        <p className="text-sm text-muted">Finishing up…</p>
+      </div>
+    );
+  }
+
   const currentQuestion = questions[currentIndex];
   const secondsLeft = remainingMs !== null ? Math.ceil(remainingMs / 1000) : null;
 
