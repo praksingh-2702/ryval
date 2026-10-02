@@ -32,6 +32,13 @@ public class MatchmakingQueue {
 
     @PrePersist
     protected void onCreate() {
-        this.queuedAt = Instant.now();
+        // BUG FIX: previously unconditional, which meant any caller trying
+        // to explicitly set queuedAt before save() (e.g. to preserve a
+        // re-joining player's original wait time for matchmaking range
+        // widening) would have it silently clobbered back to Instant.now()
+        // right here. Only default it if it hasn't already been set.
+        if (this.queuedAt == null) {
+            this.queuedAt = Instant.now();
+        }
     }
 }

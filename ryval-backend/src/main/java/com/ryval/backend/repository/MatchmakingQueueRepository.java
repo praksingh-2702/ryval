@@ -13,6 +13,14 @@ public interface MatchmakingQueueRepository extends JpaRepository<MatchmakingQue
     Optional<MatchmakingQueue> findByUser(User user);
     void deleteByUser(User user);
 
+    // Kept in case anything else still calls this directly.
     @Query("SELECT m FROM MatchmakingQueue m WHERE m.user <> :user AND ABS(m.ratingAtQueueTime - :rating) <= :range ORDER BY m.queuedAt ASC")
     List<MatchmakingQueue> findCandidates(@Param("user") User user, @Param("rating") Integer rating, @Param("range") Integer range);
+
+    // BUG FIX: range is now computed dynamically per-candidate in
+    // MatchmakingService (widens with wait time), so we fetch ALL other
+    // queued users here and filter/rank in Java instead of baking a fixed
+    // range into the SQL.
+    @Query("SELECT m FROM MatchmakingQueue m WHERE m.user <> :user ORDER BY m.queuedAt ASC")
+    List<MatchmakingQueue> findAllOtherCandidates(@Param("user") User user);
 }
