@@ -28,48 +28,31 @@ public class BattleService {
     private final BattleAnswerRepository battleAnswerRepository;
     private final QuestionRepository questionRepository;
     private final UserRepository userRepository;
+    private final BattleQuestionInitializer battleQuestionInitializer;
 
     @Transactional
     public BattleResponse startBattle(Long battleId, String username) {
-        Battle battle = battleRepository.findByIdWithLock(battleId)
-                .orElseThrow(() -> new RuntimeException("Battle not found: " + battleId));
+        Battle battle = getBattle(battleId);
 
         if (battle.getStatus() != Battle.Status.PENDING) {
             return toResponse(battle, username);
         }
 
+        // BUG FIX: question creation now happens in BattleQuestionInitializer
+        // under its own REQUIRES_NEW transaction/connection. If it loses the
+        // race against a concurrent startBattle call for the same battle,
+        // the UNIQUE(battle_id, sequence_order) constraint rejects its
+        // insert, Postgres aborts ONLY that nested transaction, and we catch
+        // it here cleanly — this (outer) transaction was never touched by
+        // the failure and can safely re-read the battle below.
         try {
-            List<Question> questions = questionRepository.findAll();
-            java.util.Collections.shuffle(questions);
-            List<Question> selected = questions.stream()
-                    .limit(QUESTIONS_PER_BATTLE)
-                    .collect(Collectors.toList());
-
-            for (int i = 0; i < selected.size(); i++) {
-                BattleQuestion bq = BattleQuestion.builder()
-                        .battle(battle)
-                        .question(selected.get(i))
-                        .sequenceOrder(i + 1)
-                        .build();
-                battleQuestionRepository.saveAndFlush(bq);
-            }
-
-            Instant now = Instant.now();
-            battle.setStatus(Battle.Status.IN_PROGRESS);
-            battle.setPlayerOneQuestionIndex(0);
-            battle.setPlayerTwoQuestionIndex(0);
-            battle.setPlayerOneQuestionDeadline(now.plusSeconds(QUESTION_TIMEOUT_SECONDS));
-            battle.setPlayerTwoQuestionDeadline(now.plusSeconds(QUESTION_TIMEOUT_SECONDS));
-            battle.setPlayerOneLastSeenAt(now);
-            battle.setPlayerTwoLastSeenAt(now);
-            battleRepository.save(battle);
+            battleQuestionInitializer.tryCreateQuestions(battleId);
         } catch (DataIntegrityViolationException ex) {
-            Battle current = battleRepository.findById(battleId)
-                    .orElseThrow(() -> new RuntimeException("Battle not found: " + battleId));
-            return toResponse(current, username);
+            // lost the race — the winner's nested transaction already committed
         }
 
-        return toResponse(battle, username);
+        Battle refreshed = getBattle(battleId);
+        return toResponse(refreshed, username);
     }
 
     @Transactional
@@ -318,6 +301,11 @@ public class BattleService {
 
     public List<Battle> getBattlesForUser(User user) {
         return battleRepository.findAllForUser(user);
+    }
+
+    private Battle getBattle(Long battleId) {
+        return battleRepository.findById(battleId)
+                .orElseThrow(() -> new RuntimeException("Battle not found: " + battleId));
     }
 
     private BattleResponse toResponse(Battle battle, String username) {
