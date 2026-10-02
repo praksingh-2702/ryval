@@ -28,7 +28,7 @@ public class BattleService {
     private final BattleAnswerRepository battleAnswerRepository;
     private final QuestionRepository questionRepository;
     private final UserRepository userRepository;
-    private final BattleQuestionInitializer battleQuestionInitializer;
+    private final BattleQuestionInitializerService battleQuestionInitializer;
 
     @Transactional
     public BattleResponse startBattle(Long battleId, String username) {
