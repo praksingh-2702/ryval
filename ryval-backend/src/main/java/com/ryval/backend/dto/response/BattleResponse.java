@@ -24,23 +24,23 @@ public class BattleResponse {
     private Instant endedAt;
     private List<QuestionSummary> questions;
 
-    // "NORMAL" or "FORFEIT" once status is COMPLETED, otherwise null.
     private String endReason;
 
-    // --- Fields personalized to whichever player is requesting this response ---
-    // 0-based index of the question the requesting player is currently on.
-    // If myFinished is true, this equals questions.size().
     private Integer myQuestionIndex;
-
-    // Server-authoritative deadline for the requester's CURRENT question.
-    // Null if the requester has finished or the battle isn't IN_PROGRESS.
-    // Frontend renders a live countdown from this timestamp but must not
-    // treat client-side expiry as authoritative - it calls /skip and lets
-    // the backend confirm.
     private Instant myQuestionDeadline;
 
     private Boolean myFinished;
     private Boolean opponentFinished;
+
+    // BUG FIX: lets the frontend compute (serverTime - Date.now()) as a
+    // clock offset, so countdowns and skip-timing are anchored to the
+    // server's clock instead of trusting the player's own device clock.
+    // Without this, a player whose system clock runs even a few seconds
+    // fast perceives the deadline as having passed early, fires /skip
+    // prematurely, gets a server-side no-op (since the real deadline
+    // hasn't passed), and can loop on that indefinitely since the question
+    // never actually advances.
+    private Instant serverTime;
 
     @Data
     @Builder
@@ -55,14 +55,7 @@ public class BattleResponse {
         private String optionC;
         private String optionD;
         private Integer sequenceOrder;
-        // Deliberately no correctAnswer field here — never send the answer key
-        // to the client before they've submitted, or it's trivially visible
-        // in the browser network tab / React state.
 
-        // Populated only if the requesting player has already answered this
-        // question (including auto-skip timeouts) - lets the frontend
-        // restore past-question feedback after a refresh without needing
-        // localStorage.
         private String myAnswer;
         private Boolean myAnswerCorrect;
         private Boolean myAnswerWasTimeout;
