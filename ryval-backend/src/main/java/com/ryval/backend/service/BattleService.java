@@ -38,15 +38,6 @@ public class BattleService {
             return toResponse(battle, username);
         }
 
-        // BUG FIX: even with the pessimistic lock above, defend against any
-        // remaining timing window (e.g. a request landing during a deploy
-        // rollover, before the lock fix was live) where two callers both
-        // attempt to create BattleQuestion rows for the same battle. The
-        // UNIQUE(battle_id, sequence_order) DB constraint will reject the
-        // loser's insert - previously that exception propagated straight to
-        // the player as a 500 ("Couldn't join queue" / kicked to dashboard).
-        // Now we catch it, re-read the battle (the winner's transaction has
-        // since committed), and just return its current state instead.
         try {
             List<Question> questions = questionRepository.findAll();
             java.util.Collections.shuffle(questions);
@@ -371,7 +362,8 @@ public class BattleService {
                 .endReason(battle.getEndReason())
                 .createdAt(battle.getCreatedAt())
                 .endedAt(battle.getEndedAt())
-                .questions(summaries);
+                .questions(summaries)
+                .serverTime(Instant.now());
 
         if (requester != null) {
             boolean myFinished = isPlayerOne ? battle.isPlayerOneFinished() : battle.isPlayerTwoFinished();

@@ -68,11 +68,24 @@ export default function Battle() {
   const feedbackTimerRef = useRef(null);
   const questionMountedAtRef = useRef(Date.now());
 
-  // DEBUG: tracks last deadline we saw, so we can log every time the
-  // deadline actually changes (new question) vs. every poll tick, and spot
-  // out-of-order poll responses or unexpected deadline shifts.
-  const lastDeadlineRef = useRef(null);
-  const lastPollIssuedAtRef = useRef(0);
+  // BUG FIX: clock offset between this device and the server, derived from
+  // serverTime on every response. correctedNow() below is used everywhere
+  // we'd otherwise call Date.now() for deadline comparisons, so a device
+  // with a fast or slow system clock no longer perceives the countdown
+  // wrong or fires /skip before or after the server's real deadline.
+  const clockOffsetRef = useRef(0);
+
+  function applyServerData(fresh) {
+    if (fresh?.serverTime) {
+      clockOffsetRef.current = new Date(fresh.serverTime).getTime() - Date.now();
+    }
+    setData(fresh);
+    return fresh;
+  }
+
+  function correctedNow() {
+    return Date.now() + clockOffsetRef.current;
+  }
 
   useEffect(() => {
     if (data) return;
@@ -80,7 +93,7 @@ export default function Battle() {
     (async () => {
       try {
         const { data: fetched } = await api.get(`/battles/${battleId}`);
-        if (!cancelled) { setData(fetched); setLoading(false); }
+        if (!cancelled) { applyServerData(fetched); setLoading(false); }
       } catch {
         if (!cancelled) { setLoadError(true); setLoading(false); }
       }
@@ -88,37 +101,16 @@ export default function Battle() {
     return () => { cancelled = true; };
   }, [battleId, data]);
 
-  // Poll for opponent state and battle completion
   useEffect(() => {
     if (!data || data.status === "COMPLETED") return;
     let cancelled = false;
     const interval = setInterval(async () => {
-      const issuedAt = ++lastPollIssuedAtRef.current;
-      const requestSentAt = Date.now();
       try {
         const { data: fresh } = await api.get(`/battles/${battleId}`);
         if (cancelled) return;
-
-        // DEBUG: detect out-of-order poll responses. If a poll issued
-        // earlier resolves AFTER a later one already updated state, this
-        // logs it — a strong candidate for the "jumping timer" symptom,
-        // since applying a stale response would briefly show an earlier
-        // deadline before the next poll corrects it.
-        if (issuedAt !== lastPollIssuedAtRef.current) {
-          console.warn(
-            `[timer-debug] STALE POLL RESPONSE applied — issued #${issuedAt}, ` +
-            `latest is #${lastPollIssuedAtRef.current}. Round-trip: ${Date.now() - requestSentAt}ms`
-          );
+        if (fresh?.serverTime) {
+          clockOffsetRef.current = new Date(fresh.serverTime).getTime() - Date.now();
         }
-
-        if (fresh.myQuestionDeadline !== lastDeadlineRef.current) {
-          console.log(
-            `[timer-debug] deadline changed: ${lastDeadlineRef.current} -> ${fresh.myQuestionDeadline} ` +
-            `(myQuestionIndex=${fresh.myQuestionIndex}, client now=${new Date().toISOString()})`
-          );
-          lastDeadlineRef.current = fresh.myQuestionDeadline;
-        }
-
         setData((prev) => {
           if (prev && fresh.myQuestionIndex !== prev.myQuestionIndex) {
             startedAtRef.current = Date.now();
@@ -126,9 +118,7 @@ export default function Battle() {
           }
           return fresh;
         });
-      } catch (err) {
-        console.warn(`[timer-debug] poll #${issuedAt} failed:`, err?.message);
-      }
+      } catch { /* transient */ }
     }, POLL_INTERVAL_MS);
     return () => { cancelled = true; clearInterval(interval); };
   }, [battleId, data?.status]);
@@ -146,19 +136,16 @@ export default function Battle() {
   }, [data?.myQuestionIndex, feedback]);
 
   const deadlineMs = data?.myQuestionDeadline ? new Date(data.myQuestionDeadline).getTime() : null;
-  const remainingMs = deadlineMs !== null ? Math.max(0, deadlineMs - now) : null;
+  // BUG FIX: use correctedNow() (server-offset-adjusted) instead of raw `now`
+  // state for the actual remaining-time calculation.
+  const remainingMs = deadlineMs !== null ? Math.max(0, deadlineMs - (now + clockOffsetRef.current)) : null;
 
   useEffect(() => () => { if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current); }, []);
 
   function showFeedbackThenAdvance(freshData, label, isCorrect) {
-    if (freshData.myQuestionDeadline !== lastDeadlineRef.current) {
-      console.log(
-        `[timer-debug] deadline changed via answer/skip response: ${lastDeadlineRef.current} -> ` +
-        `${freshData.myQuestionDeadline} (myQuestionIndex=${freshData.myQuestionIndex})`
-      );
-      lastDeadlineRef.current = freshData.myQuestionDeadline;
+    if (freshData?.serverTime) {
+      clockOffsetRef.current = new Date(freshData.serverTime).getTime() - Date.now();
     }
-
     setFeedback({ label, isCorrect });
     setData(freshData);
     setSelectedOption(null);
@@ -174,7 +161,7 @@ export default function Battle() {
         finishingRef.current = true;
         try {
           const { data: ended } = await api.post(`/battles/${battleId}/end`);
-          setData(ended);
+          applyServerData(ended);
         } catch {
           navigate("/dashboard");
         } finally {
@@ -191,10 +178,9 @@ export default function Battle() {
     if (skippedIndexRef.current === data.myQuestionIndex) return;
     skippedIndexRef.current = data.myQuestionIndex;
 
-    console.log(`[timer-debug] auto-skip/submit firing at question ${data.myQuestionIndex}, client now=${new Date().toISOString()}`);
-
     const currentQuestion = data.questions[data.myQuestionIndex];
     const pendingSelection = selectedOption;
+    const indexBeforeCall = data.myQuestionIndex;
 
     (async () => {
       try {
@@ -210,6 +196,22 @@ export default function Battle() {
           showFeedbackThenAdvance(fresh, correct ? "Time's up — your pick was correct!" : "Time's up — not correct.", correct);
         } else {
           const { data: fresh } = await api.post(`/battles/${battleId}/skip`);
+
+          // BUG FIX: the backend silently no-ops /skip if, from the SERVER's
+          // clock, the deadline hasn't actually passed yet — which can
+          // happen if this client's deadline math is still off by a little
+          // (clock drift, latency, etc). Previously we'd show a fake
+          // "skipped" feedback and loop forever since the index never
+          // actually changed. Now we detect the no-op (index unchanged),
+          // silently resync clock + state, and let the (now better-synced)
+          // countdown naturally re-trigger skip once the real deadline
+          // passes — instead of faking progress or spinning indefinitely.
+          if (fresh.myQuestionIndex === indexBeforeCall) {
+            applyServerData(fresh);
+            skippedIndexRef.current = null;
+            return;
+          }
+
           showFeedbackThenAdvance(fresh, "Time's up — question skipped.", false);
         }
       } catch {
@@ -249,7 +251,7 @@ export default function Battle() {
             !!answered.myAnswerCorrect
           );
         } else {
-          setData(fresh);
+          applyServerData(fresh);
         }
       } catch {
         // Backend unreachable — leave state as-is, the poll loop retries.
