@@ -72,7 +72,15 @@ public class SecurityConfig {
         configuration.setAllowedOrigins(List.of(
                 "http://localhost:3000",
                 "http://localhost:5173",
-                "https://ryval-phi.vercel.app"
+                "https://ryval-phi.vercel.app",
+                // BUG FIX: staging Vercel preview URL was missing, causing
+                // every request from the develop-branch preview deployment
+                // to be rejected by CORS (403 on preflight) before it ever
+                // reached the controller. This is the stable branch alias
+                // Vercel assigns to the latest deployment on `develop` -
+                // it doesn't change between deployments, unlike the
+                // per-deployment immutable URL.
+                "https://ryval-git-develop-diwijprakhar27-4629s-projects.vercel.app"
         ));
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
