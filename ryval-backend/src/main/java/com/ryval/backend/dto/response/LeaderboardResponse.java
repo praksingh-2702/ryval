@@ -14,4 +14,5 @@ public class LeaderboardResponse {
     private Long userId;
     private String username;
     private Integer rating;
+    private AvatarResponse avatar;
 }

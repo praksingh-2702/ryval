@@ -1,5 +1,6 @@
 package com.ryval.backend.service;
 
+import com.ryval.backend.dto.response.AvatarResponse;
 import com.ryval.backend.dto.response.LeaderboardResponse;
 import com.ryval.backend.model.LeaderboardSnapshot;
 import com.ryval.backend.model.User;
@@ -29,12 +30,16 @@ public class LeaderboardService {
         ).getContent();
 
         return IntStream.range(0, topUsers.size())
-                .mapToObj(i -> LeaderboardResponse.builder()
-                        .rank(i + 1)
-                        .userId(topUsers.get(i).getId())
-                        .username(topUsers.get(i).getUsername())
-                        .rating(topUsers.get(i).getRating())
-                        .build())
+                .mapToObj(i -> {
+                    User u = topUsers.get(i);
+                    return LeaderboardResponse.builder()
+                            .rank(i + 1)
+                            .userId(u.getId())
+                            .username(u.getUsername())
+                            .rating(u.getRating())
+                            .avatar(AvatarResponse.from(u))
+                            .build();
+                })
                 .collect(Collectors.toList());
     }
 

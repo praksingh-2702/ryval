@@ -1,26 +1,43 @@
 @import "tailwindcss";
 
 @theme {
-  --font-display: "Space Grotesk", sans-serif;
-  --font-sans: "Inter", sans-serif;
+  --font-display: "Big Shoulders Display", "Arial Narrow", sans-serif;
+  --font-sans: "General Sans", system-ui, sans-serif;
 
-  --color-ink: #0b0b12;
+  /* New system: cool ice base, ink outlines, royal blue + lemon */
+  --color-ice: #e6eaf1;
+  --color-card: #fbfcfe;
+  --color-soft: #5b6372;
+  --color-royal: #2d4bff;
+  --color-royal-deep: #1f38d6;
+  --color-lemon: #ffe94d;
+
+  /* Shared. Ink is used as text/outline on light pages and as the
+     background on the legacy dark pages (Landing, Battle) until they
+     are redone. */
+  --color-ink: #0d1018;
+
+  /* Legacy tokens, still used by Landing.jsx and Battle.jsx. Removed
+     once those pages are rebuilt. */
   --color-ink-raised: #14141f;
   --color-ink-line: #24242f;
-
   --color-paper: #f5f4fa;
   --color-muted: #8a889c;
-
   --color-violet: #7c5cff;
   --color-violet-dim: #5a3fd6;
   --color-coral: #ff4d6d;
   --color-coral-dim: #d63a56;
   --color-gold: #ffc857;
+
+  /* Hard offset shadows: no blur, they read as physical depth */
+  --shadow-hard-sm: 2px 2px 0 0 var(--color-ink);
+  --shadow-hard: 4px 4px 0 0 var(--color-ink);
+  --shadow-hard-lg: 6px 6px 0 0 var(--color-ink);
 }
 
 html {
-  background: var(--color-ink);
-  color: var(--color-paper);
+  background: var(--color-ice);
+  color: var(--color-ink);
 }
 
 body {
@@ -29,8 +46,41 @@ body {
 }
 
 ::selection {
-  background: var(--color-violet);
-  color: white;
+  background: var(--color-lemon);
+  color: var(--color-ink);
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-royal);
+  outline-offset: 3px;
+}
+
+/* Brightness slider used by the color wheel */
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 22px;
+  border: 2px solid var(--color-ink);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--color-card);
+  border: 2px solid var(--color-ink);
+  box-shadow: var(--shadow-hard-sm);
+}
+.slider::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--color-card);
+  border: 2px solid var(--color-ink);
+  box-shadow: var(--shadow-hard-sm);
 }
 
 @media (prefers-reduced-motion: reduce) {

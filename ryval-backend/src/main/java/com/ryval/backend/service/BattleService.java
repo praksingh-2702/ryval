@@ -278,13 +278,21 @@ public class BattleService {
                 .count();
     }
 
+    // CHANGED: a draw (winner == null) now counts toward both players' draws
+    // instead of returning without recording anything, so wins + losses +
+    // draws always adds up to games played. Ratings don't change on a draw.
     private void updateRatingsAndRecord(Battle battle, User winner) {
+        User p1 = battle.getPlayerOne();
+        User p2 = battle.getPlayerTwo();
+
         if (winner == null) {
+            p1.setDraws((p1.getDraws() == null ? 0 : p1.getDraws()) + 1);
+            p2.setDraws((p2.getDraws() == null ? 0 : p2.getDraws()) + 1);
+            userRepository.save(p1);
+            userRepository.save(p2);
             return;
         }
 
-        User p1 = battle.getPlayerOne();
-        User p2 = battle.getPlayerTwo();
         final int K = 20;
 
         User loser = winner.getId().equals(p1.getId()) ? p2 : p1;

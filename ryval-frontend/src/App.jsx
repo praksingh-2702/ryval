@@ -3,6 +3,7 @@ import Landing from "./pages/Landing";
 import Register from "./pages/Register";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
+import Customize from "./pages/Customize";
 import Queue from "./pages/Queue";
 import Battle from "./pages/Battle";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -19,6 +20,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Dashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/customize"
+          element={
+            <ProtectedRoute>
+              <Customize />
             </ProtectedRoute>
           }
         />

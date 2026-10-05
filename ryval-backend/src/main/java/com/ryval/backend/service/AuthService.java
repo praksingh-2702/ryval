@@ -1,8 +1,10 @@
 package com.ryval.backend.service;
 
+import com.ryval.backend.config.AvatarCatalog;
 import com.ryval.backend.dto.request.LoginRequest;
 import com.ryval.backend.dto.request.RegisterRequest;
 import com.ryval.backend.dto.response.AuthResponse;
+import com.ryval.backend.dto.response.AvatarResponse;
 import com.ryval.backend.model.User;
 import com.ryval.backend.repository.UserRepository;
 import com.ryval.backend.security.CustomUserDetails;
@@ -21,6 +23,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final AuthenticationManager authenticationManager;
+    private final AvatarCatalog avatarCatalog;
 
     public AuthResponse register(RegisterRequest request) {
         if (userRepository.existsByUsername(request.getUsername())) {
@@ -30,10 +33,18 @@ public class AuthService {
             throw new IllegalArgumentException("Email already registered");
         }
 
+        // Every new account starts with a random sigil, so no profile is
+        // ever blank. The frontend sends the player to the customizer next.
+        AvatarResponse starter = avatarCatalog.randomStarter();
+
         User user = User.builder()
                 .username(request.getUsername())
                 .email(request.getEmail())
                 .passwordHash(passwordEncoder.encode(request.getPassword()))
+                .avatarShape(starter.getShape())
+                .avatarEyes(starter.getEyes())
+                .avatarMark(starter.getMark())
+                .avatarColor(starter.getColor())
                 .build();
 
         userRepository.save(user);

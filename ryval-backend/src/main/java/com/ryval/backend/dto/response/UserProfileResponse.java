@@ -16,4 +16,6 @@ public class UserProfileResponse {
     private Integer rating;
     private Integer wins;
     private Integer losses;
+    private Integer draws;
+    private AvatarResponse avatar;
 }

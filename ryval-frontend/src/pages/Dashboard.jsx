@@ -1,136 +1,134 @@
-import { motion } from "framer-motion";
-import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Trophy, LogOut, Swords } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import api from "../lib/api";
+import { useLeaderboard, useProfile } from "../lib/queries";
+import Avatar from "../components/avatar/Avatar";
+import Button from "../components/ui/Button";
+import Panel from "../components/ui/Panel";
+import ProfileMenu from "../components/ProfileMenu";
+import Wordmark from "../components/Wordmark";
 
-function useProfile() {
-  return useQuery({
-    queryKey: ["me"],
-    queryFn: async () => (await api.get("/users/me")).data,
-  });
-}
+const plural = (n, one, many) => (n === 1 ? one : many);
 
-function useLeaderboard() {
-  return useQuery({
-    queryKey: ["leaderboard"],
-    queryFn: async () => (await api.get("/leaderboard?limit=10")).data,
-    refetchInterval: 15000, // keep it feeling live
-  });
-}
-
-export default function Dashboard() {
-  const { user, logout } = useAuth();
-  const navigate = useNavigate();
-  const { data: profile, isLoading: profileLoading } = useProfile();
-  const { data: leaderboard, isLoading: leaderboardLoading } = useLeaderboard();
-
-  function handleLogout() {
-    logout();
-    navigate("/login");
-  }
+// Wins, losses and draws as one proportional bar, so the shape of a
+// record reads at a glance. Draws are shown here and nowhere else.
+function RecordBar({ wins, losses, draws }) {
+  const total = wins + losses + draws;
+  const segments = [
+    { key: "wins", n: wins, fill: "bg-lemon", text: `${wins} ${plural(wins, "win", "wins")}` },
+    { key: "losses", n: losses, fill: "bg-coral", text: `${losses} ${plural(losses, "loss", "losses")}` },
+    { key: "draws", n: draws, fill: "bg-ink/20", text: `${draws} ${plural(draws, "draw", "draws")}` },
+  ];
 
   return (
-    <div className="min-h-screen bg-ink text-paper">
-      <nav className="flex items-center justify-between px-6 md:px-12 py-6 border-b border-ink-line">
-        <span className="font-display text-xl font-bold">RYVAL</span>
-        <button
-          onClick={handleLogout}
-          className="flex items-center gap-2 text-sm text-muted hover:text-coral transition-colors"
-        >
-          <LogOut size={16} />
-          Log out
-        </button>
-      </nav>
+    <div>
+      <div className="flex h-7 overflow-hidden rounded-full border-2 border-ink bg-card">
+        {segments
+          .filter((s) => s.n > 0)
+          .map((s) => (
+            <div
+              key={s.key}
+              className={`${s.fill} border-r-2 border-ink last:border-r-0`}
+              style={{ flex: `${s.n} 1 0` }}
+            />
+          ))}
+      </div>
 
-      <main className="max-w-4xl mx-auto px-6 md:px-12 py-10">
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4 }}
-        >
-          <p className="text-sm text-muted">Welcome back,</p>
-          <h1 className="font-display text-3xl font-bold mb-8">
-            {user?.username || "player"}
-          </h1>
-        </motion.div>
-
-        <div className="grid md:grid-cols-3 gap-4 mb-10">
-          <StatCard
-            label="Rating"
-            value={profileLoading ? "—" : profile?.rating}
-            accent="violet"
-          />
-          <StatCard
-            label="Wins"
-            value={profileLoading ? "—" : profile?.wins}
-            accent="gold"
-          />
-          <StatCard
-            label="Losses"
-            value={profileLoading ? "—" : profile?.losses}
-            accent="coral"
-          />
-        </div>
-
-        <button
-          onClick={() => navigate("/queue")}
-          className="w-full flex items-center justify-center gap-2 bg-violet hover:bg-violet-dim transition-colors text-white font-semibold py-4 rounded-xl mb-12 text-base"
-        >
-          <Swords size={18} />
-          Find a battle
-        </button>
-
-        <section>
-          <div className="flex items-center gap-2 mb-4">
-            <Trophy size={18} className="text-gold" />
-            <h2 className="font-display text-lg font-semibold">Leaderboard</h2>
-          </div>
-
-          <div className="border border-ink-line rounded-xl overflow-hidden">
-            {leaderboardLoading && (
-              <p className="text-sm text-muted px-4 py-6 text-center">Loading…</p>
-            )}
-            {leaderboard?.map((entry, i) => (
-              <div
-                key={entry.userId}
-                className={`flex items-center justify-between px-4 py-3 text-sm ${
-                  i !== leaderboard.length - 1 ? "border-b border-ink-line" : ""
-                } ${entry.username === user?.username ? "bg-violet/10" : ""}`}
-              >
-                <div className="flex items-center gap-3">
-                  <span className="font-display font-semibold text-muted w-5">
-                    {entry.rank}
-                  </span>
-                  <span className="font-medium">{entry.username}</span>
-                </div>
-                <span className="text-gold font-semibold">{entry.rating}</span>
-              </div>
-            ))}
-            {leaderboard?.length === 0 && (
-              <p className="text-sm text-muted px-4 py-6 text-center">
-                No one's battled yet — be the first.
-              </p>
-            )}
-          </div>
-        </section>
-      </main>
+      {total === 0 ? (
+        <p className="mt-3 text-soft">No battles yet. Your record starts with your first one.</p>
+      ) : (
+        <ul className="mt-3 flex flex-wrap gap-x-6 gap-y-1 font-medium">
+          {segments.map((s) => (
+            <li key={s.key} className="flex items-center gap-2">
+              <span aria-hidden="true" className={`h-3.5 w-3.5 rounded-sm border-2 border-ink ${s.fill}`} />
+              {s.text}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
 
-function StatCard({ label, value, accent }) {
-  const accentClass = {
-    violet: "text-violet",
-    gold: "text-gold",
-    coral: "text-coral",
-  }[accent];
+export default function Dashboard() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const { data: profile } = useProfile();
+  const { data: leaderboard, isLoading: leaderboardLoading } = useLeaderboard(10);
 
   return (
-    <div className="bg-ink-raised border border-ink-line rounded-xl p-5">
-      <p className="text-xs text-muted mb-1">{label}</p>
-      <p className={`font-display text-3xl font-bold ${accentClass}`}>{value}</p>
+    <div className="min-h-screen bg-ice text-ink">
+      <header className="flex items-center justify-between border-b-2 border-ink px-6 py-4 md:px-12">
+        <Wordmark />
+        <ProfileMenu />
+      </header>
+
+      <main className="mx-auto max-w-4xl px-6 py-10 md:px-12">
+        <Panel className="p-6 sm:p-8">
+          <div className="flex flex-col gap-6 sm:flex-row sm:items-center">
+            <Avatar avatar={profile?.avatar} size={120} shadow />
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate font-display text-6xl font-black leading-none sm:text-7xl">
+                {user?.username || "player"}
+              </h1>
+              <p className="mt-3 text-lg">
+                <span className="font-display text-5xl font-extrabold tabular-nums">
+                  {profile ? profile.rating : "-"}
+                </span>{" "}
+                <span className="text-soft">rating</span>
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-8">
+            <RecordBar
+              wins={profile?.wins ?? 0}
+              losses={profile?.losses ?? 0}
+              draws={profile?.draws ?? 0}
+            />
+          </div>
+        </Panel>
+
+        <Button size="xl" className="mt-8 w-full" onClick={() => navigate("/queue")}>
+          Find a battle
+        </Button>
+
+        <section className="mt-14">
+          <h2 className="font-display text-4xl font-extrabold">Leaderboard</h2>
+
+          <Panel className="mt-4 overflow-hidden">
+            {leaderboardLoading && <p className="px-6 py-8 text-center text-soft">Loading the board</p>}
+
+            {leaderboard?.length === 0 && (
+              <p className="px-6 py-8 text-center text-soft">
+                Nobody has battled yet. Be the first on the board.
+              </p>
+            )}
+
+            <ol>
+              {leaderboard?.map((entry, i) => {
+                const mine = String(entry.userId) === String(user?.userId);
+                return (
+                  <li
+                    key={entry.userId}
+                    className={`flex items-center gap-4 px-5 py-3 ${mine ? "bg-lemon" : ""} ${
+                      i < leaderboard.length - 1 ? "border-b-2 border-ink/15" : ""
+                    }`}
+                  >
+                    <span className="w-6 font-display text-3xl font-extrabold tabular-nums text-soft">
+                      {entry.rank}
+                    </span>
+                    <Avatar avatar={entry.avatar} size={44} />
+                    <span className="min-w-0 flex-1 truncate font-display text-3xl font-bold">
+                      {entry.username}
+                    </span>
+                    <span className="font-display text-3xl font-extrabold tabular-nums">{entry.rating}</span>
+                  </li>
+                );
+              })}
+            </ol>
+          </Panel>
+        </section>
+      </main>
     </div>
   );
 }

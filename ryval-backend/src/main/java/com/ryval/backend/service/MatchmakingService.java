@@ -29,7 +29,9 @@ public class MatchmakingService {
     // candidates under the old fixed-range query. Range now widens the
     // longer either side has waited, so a match eventually happens.
     private static final int INITIAL_RATING_RANGE = 100;
-    private static final int MAX_RATING_RANGE = 1000; // effectively "match anyone" ceiling
+    // Hard cap on how far apart two players can be and still match. Two
+    // players more than this many rating points apart will never match.
+    private static final int MAX_RATING_RANGE = 300;
     private static final int RANGE_GROWTH_PER_SECOND = 5; // range grows by this much per second waited
 
     private static final long MATCHMAKING_LOCK_KEY = 927364;
